@@ -167,6 +167,22 @@ Ask before:
 - making broad architectural refactors
 - running live verification that goes beyond minimal read-only checks
 
+## Write-command contract
+
+Every CLI command that mutates Superset state (create, update, delete via the API) must require an explicit `--allow-write` flag on every invocation. Default off.
+
+Rules:
+- `--allow-write` is per-invocation. It is never persisted in the config file, never read from an environment variable, and never defaulted on.
+- Without the flag, the command exits non-zero with a message naming the missing flag and the mutation it would have performed (for example: `"This would delete dashboard 7. Re-run with --allow-write to perform the write."`).
+- The check lives in a shared helper in `src/superset_cli/cli.py` so individual commands cannot forget it.
+- Help text for every write command must state "Required to actually perform the write. Without it the command is a dry-run."
+- The check applies to every write command, including ones that look idempotent (for example setting a tag).
+- `--allow-write` is never granted by a confirmation prompt, a config flag, or a parent command — only by the literal CLI argument on the same invocation.
+
+This rule exists so that unintended write calls (typos, copy-paste mistakes, agent overshoot) fail safe, human and agent operators see the same friction, and the read-only product posture remains visible in every write surface that ever gets added.
+
+See [`docs/decisions/0009-write-command-explicit-opt-in.md`](docs/decisions/0009-write-command-explicit-opt-in.md) for the full rationale and alternatives considered.
+
 ## Never do these things
 
 - never fabricate results
