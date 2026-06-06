@@ -32,12 +32,20 @@ A structural overview of modules, command-to-code mappings, and test entry point
 
 ## Quick start
 
+If you use `direnv`, allow the repo once and `devenv` will auto-activate whenever you enter this directory.
+
 ```bash
-devenv shell
+direnv allow
 uv sync --group dev
 uv run playwright install chromium
 uv run superset-agent --help
 uv run pytest -v
+```
+
+Without `direnv`, enter the shell manually:
+
+```bash
+devenv shell
 ```
 
 ## Current commands
