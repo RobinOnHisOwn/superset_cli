@@ -48,8 +48,9 @@ uv run pytest -v
 uv run pytest tests/test_cli.py -v
 uv run superset-cli --help
 uv build
-uv run playwright install chromium
 ```
+
+The CLI reads Superset session cookies directly from an installed browser via `browser-cookie3` — no extra browser install step is required.
 
 Use `uv` to run Python commands. Prefer `devenv shell` before development work.
 

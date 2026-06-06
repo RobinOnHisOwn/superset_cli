@@ -66,7 +66,7 @@ def test_datasets_list_network_error_prints_message(monkeypatch, instance_setup)
     config_path, state_dir = instance_setup
 
     class NetworkErrorFake(FakeSupersetClient):
-        def list_datasets(self, *, page=None, page_size=None):
+        def list_datasets(self, *, page=None, page_size=None, search=None, order_column=None, order_direction=None):
             raise httpx.ConnectError("Connection refused")
 
     monkeypatch.setattr("superset_cli.cli.SupersetClient", NetworkErrorFake)
@@ -120,8 +120,16 @@ def test_datasets_list_forwards_page_to_client(monkeypatch, instance_setup) -> N
     captured: list[dict] = []
 
     class CapturingFake(FakeSupersetClient):
-        def list_datasets(self, *, page=None, page_size=None):
-            captured.append({"page": page, "page_size": page_size})
+        def list_datasets(self, *, page=None, page_size=None, search=None, order_column=None, order_direction=None):
+            captured.append(
+                {
+                    "page": page,
+                    "page_size": page_size,
+                    "search": search,
+                    "order_column": order_column,
+                    "order_direction": order_direction,
+                }
+            )
             return super().list_datasets(page=page, page_size=page_size)
 
     monkeypatch.setattr("superset_cli.cli.SupersetClient", CapturingFake)
@@ -131,18 +139,25 @@ def test_datasets_list_forwards_page_to_client(monkeypatch, instance_setup) -> N
         [
             "--config", str(config_path), "datasets", "list", "prod",
             "--state-dir", str(state_dir), "--page", "1", "--page-size", "15",
+            "--search", "orders", "--order-column", "table_name", "--order-direction", "asc",
         ],
     )
 
     assert result.exit_code == 0
-    assert captured[0] == {"page": 1, "page_size": 15}
+    assert captured[0] == {
+        "page": 1,
+        "page_size": 15,
+        "search": "orders",
+        "order_column": "table_name",
+        "order_direction": "asc",
+    }
 
 
 def test_datasets_list_empty_returns_message(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
 
     class EmptyFake(FakeSupersetClient):
-        def list_datasets(self, *, page=None, page_size=None):
+        def list_datasets(self, *, page=None, page_size=None, search=None, order_column=None, order_direction=None):
             return {"count": 0, "result": []}
 
     monkeypatch.setattr("superset_cli.cli.SupersetClient", EmptyFake)
@@ -179,6 +194,7 @@ def test_datasets_list_json_shape_unchanged_with_pagination(monkeypatch, instanc
         [
             "--config", str(config_path), "datasets", "list", "prod",
             "--state-dir", str(state_dir), "--json", "--page", "0", "--page-size", "2",
+            "--search", "orders", "--order-column", "table_name", "--order-direction", "asc",
         ],
     )
 

@@ -15,7 +15,24 @@ class FakeSupersetClient:
             "last_name": "Agent",
         }
 
-    def list_dashboards(self, *, page: int | None = None, page_size: int | None = None) -> dict:
+    def get_current_user_roles(self) -> dict:
+        return {"roles": [{"id": 1, "name": "Admin"}, {"id": 2, "name": "Gamma"}]}
+
+    def get_openapi_spec(self) -> dict:
+        return {
+            "openapi": "3.0.0",
+            "info": {"title": "Superset API", "version": "1.0.0"},
+        }
+
+    def list_dashboards(
+        self,
+        *,
+        page: int | None = None,
+        page_size: int | None = None,
+        search: str | None = None,
+        order_column: str | None = None,
+        order_direction: str | None = None,
+    ) -> dict:
         return {
             "count": 2,
             "result": [
@@ -32,7 +49,25 @@ class FakeSupersetClient:
             "published": True,
         }
 
-    def list_charts(self, *, page: int | None = None, page_size: int | None = None) -> dict:
+    def get_dashboard_charts(self, id_or_slug: str) -> list[dict]:
+        return [
+            {"id": 10, "slice_name": "Revenue by Month", "viz_type": "line"},
+        ]
+
+    def get_dashboard_datasets(self, id_or_slug: str) -> list[dict]:
+        return [
+            {"id": 21, "table_name": "orders", "schema": "analytics"},
+        ]
+
+    def list_charts(
+        self,
+        *,
+        page: int | None = None,
+        page_size: int | None = None,
+        search: str | None = None,
+        order_column: str | None = None,
+        order_direction: str | None = None,
+    ) -> dict:
         return {
             "count": 2,
             "result": [
@@ -48,7 +83,29 @@ class FakeSupersetClient:
             "viz_type": "line",
         }
 
-    def list_datasets(self, *, page: int | None = None, page_size: int | None = None) -> dict:
+    def get_chart_data(self, pk: str) -> dict:
+        return {
+            "result": [
+                {
+                    "rowcount": 2,
+                    "colnames": ["month", "revenue"],
+                    "data": [
+                        {"month": "2026-01", "revenue": 100},
+                        {"month": "2026-02", "revenue": 120},
+                    ],
+                }
+            ]
+        }
+
+    def list_datasets(
+        self,
+        *,
+        page: int | None = None,
+        page_size: int | None = None,
+        search: str | None = None,
+        order_column: str | None = None,
+        order_direction: str | None = None,
+    ) -> dict:
         return {
             "count": 2,
             "result": [
@@ -64,7 +121,15 @@ class FakeSupersetClient:
             "schema": "analytics",
         }
 
-    def list_databases(self, *, page: int | None = None, page_size: int | None = None) -> dict:
+    def list_databases(
+        self,
+        *,
+        page: int | None = None,
+        page_size: int | None = None,
+        search: str | None = None,
+        order_column: str | None = None,
+        order_direction: str | None = None,
+    ) -> dict:
         return {
             "count": 2,
             "result": [
@@ -79,6 +144,91 @@ class FakeSupersetClient:
             "database_name": "analytics",
             "backend": "snowflake",
         }
+
+    def get_database_schemas(self, pk: str, *, catalog: str | None = None, force: bool = False) -> list[str]:
+        return ["analytics", "public"]
+
+    def get_database_tables(
+        self,
+        pk: str,
+        *,
+        schema_name: str,
+        catalog_name: str | None = None,
+        force: bool = False,
+    ) -> dict:
+        return {
+            "count": 2,
+            "result": [
+                {"value": "orders", "type": "table", "extra": {}},
+                {"value": "customer_view", "type": "view", "extra": {}},
+            ],
+        }
+
+    def list_annotation_layers(self, **kwargs) -> dict:
+        return {"count": 1, "result": [{"id": 50, "name": "Earnings", "descr": "Earnings releases"}]}
+
+    def get_annotation_layer(self, pk: str) -> dict:
+        return {"id": 50, "name": "Earnings", "descr": "Earnings releases"}
+
+    def list_css_templates(self, **kwargs) -> dict:
+        return {"count": 1, "result": [{"id": 1, "template_name": "Dark"}]}
+
+    def get_css_template(self, pk: str) -> dict:
+        return {"id": 1, "template_name": "Dark"}
+
+    def list_themes(self, **kwargs) -> dict:
+        return {"count": 1, "result": [{"id": 1, "theme_name": "Default"}]}
+
+    def get_theme(self, pk: str) -> dict:
+        return {"id": 1, "theme_name": "Default"}
+
+    def list_tags(self, **kwargs) -> dict:
+        return {"count": 1, "result": [{"id": 1, "name": "finance", "type": "custom"}]}
+
+    def get_tag(self, pk: str) -> dict:
+        return {"id": 1, "name": "finance", "type": "custom"}
+
+    def list_reports(self, **kwargs) -> dict:
+        return {"count": 1, "result": [{"id": 1, "name": "Weekly", "type": "Report", "active": True}]}
+
+    def get_report(self, pk: str) -> dict:
+        return {"id": 1, "name": "Weekly", "type": "Report", "active": True}
+
+    def list_saved_queries(self, **kwargs) -> dict:
+        return {"count": 1, "result": [{"id": 1, "label": "Top customers", "schema": "analytics"}]}
+
+    def get_saved_query(self, pk: str) -> dict:
+        return {"id": 1, "label": "Top customers", "schema": "analytics"}
+
+    def list_queries(self, **kwargs) -> dict:
+        return {"count": 1, "result": [{"id": 1, "status": "success", "rows": 42, "sql": "select 1"}]}
+
+    def get_query(self, pk: str) -> dict:
+        return {"id": 1, "status": "success", "rows": 42, "sql": "select 1"}
+
+    def list_logs(self, **kwargs) -> dict:
+        return {"count": 1, "result": [{"id": 1, "action": "dashboard", "dttm": "2026-06-06T12:00:00"}]}
+
+    def get_log(self, pk: str) -> dict:
+        return {"id": 1, "action": "dashboard", "user": {"username": "alice"}, "dttm": "2026-06-06T12:00:00"}
+
+    def get_recent_activity(self) -> dict:
+        return {"result": [{"action": "dashboard", "item_title": "Revenue", "time": 1717678800000}]}
+
+    def get_dashboard_embedded(self, id_or_slug: str) -> dict:
+        return {"uuid": "abc-123", "dashboard_id": "7", "allowed_domains": ["example.com"]}
+
+    def get_permalink(self, kind: str, key: str) -> dict:
+        return {"state": {"filters": []}, "url": f"/{kind}/p/{key}"}
+
+    def get_dataset_related_objects(self, id_or_uuid: str) -> dict:
+        return {
+            "charts": {"count": 1, "result": [{"id": 10, "slice_name": "Revenue by Month"}]},
+            "dashboards": {"count": 1, "result": [{"id": 7, "title": "Revenue"}]},
+        }
+
+    def get_datasource_column_values(self, datasource_type: str, datasource_id: str, column: str) -> dict:
+        return {"result": ["a", "b", "c"]}
 
     def close(self) -> None:
         self.closed = True

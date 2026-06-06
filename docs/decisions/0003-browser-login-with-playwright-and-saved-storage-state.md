@@ -1,6 +1,6 @@
 # 0003: Browser login with Playwright and saved storage state
 
-- Status: accepted
+- Status: superseded by [0008](0008-cookie-extraction-from-installed-browsers.md)
 - Date: 2026-06-05
 - Related: `src/superset_cli/auth.py`, `src/superset_cli/client.py`, `tests/test_auth.py`, `tests/test_auth_validate.py`, `README.md`
 

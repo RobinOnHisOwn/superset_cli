@@ -8,8 +8,8 @@ Current scope is intentionally read-only:
 - manage local Superset instance configuration (add, list, remove)
 - launch browser-based login, remove local auth state, and save auth state locally
 - inspect and validate saved auth state
-- read dashboards, charts, datasets, and databases through the Superset REST API
-- paginate list results with `--page` (0-based index) and `--page-size` CLI flags
+- read dashboards, dashboard-related charts/datasets, charts, datasets, databases, database schemas/tables, and the live OpenAPI spec through the Superset REST API
+- paginate and refine list results with `--page` (0-based index), `--page-size`, `--search`, `--order-column`, and `--order-direction` CLI flags
 
 This document explains how the current code is organized. For repository rationale, read `docs/decisions/`. For agent workflow rules, read `AGENTS.md`.
 
@@ -22,7 +22,7 @@ Typical command flow:
 1. The CLI entrypoint starts in `src/superset_cli/main.py`.
 2. Typer command registration and command implementations live in `src/superset_cli/cli.py`.
 3. Commands load configured instances through `src/superset_cli/config.py`.
-4. Auth-related commands derive browser profile and storage-state paths through `src/superset_cli/auth.py`.
+4. Auth-related commands derive storage-state paths through `src/superset_cli/auth.py` and import cookies from an installed browser via `browser-cookie3`.
 5. API-backed commands load saved browser state through `src/superset_cli/client.py`.
 6. `SupersetClient` sends read-only REST requests and returns JSON payloads.
 7. `cli.py` formats those payloads for human-readable output or emits compact `--json` output.
@@ -58,12 +58,13 @@ Owns the command-line interface:
 Current command groups:
 - `instances`
 - `auth`
+- `openapi`
 - `dashboards`
 - `charts`
 - `datasets`
 - `databases`
 
-All four list commands (`dashboards list`, `charts list`, `datasets list`, `databases list`) accept optional `--page` (0-based integer) and `--page-size` flags. When omitted, Superset applies its own defaults. The JSON output shape is unchanged regardless of whether pagination flags are supplied.
+All four list commands (`dashboards list`, `charts list`, `datasets list`, `databases list`) accept optional `--page` (0-based integer), `--page-size`, `--search`, `--order-column`, and `--order-direction` flags. `--search` maps to each resource's primary name/title field using Superset contains filtering, while ordering flags forward directly into the Superset list query payload. When omitted, Superset applies its own defaults. The JSON output shape is unchanged regardless of whether these flags are supplied.
 
 ### `config.py`
 
@@ -88,7 +89,7 @@ It also normalizes and validates `base_url` values.
 
 Owns auth-state helpers:
 - derive storage-state path per instance
-- derive browser profile directory per instance
+- derive storage-state path per instance
 - inspect saved auth state
 - remove saved auth state for one instance
 - launch a Playwright browser for interactive login and save the resulting storage state
@@ -101,20 +102,25 @@ Owns API access helpers:
 - perform read-only Superset REST requests through `SupersetClient`
 - raise `AuthExpiredError` on HTTP 401 or non-JSON (redirect-style auth failure) responses
 - raise `NotFoundError` on HTTP 404 responses
-- build Superset `q` query params for pagination via `build_list_params(page, page_size)`
+- build Superset `q` query params for pagination, contains filters, and ordering via `build_list_params(...)`
 
-`build_list_params` returns `{"q": json.dumps({...})}` with only the keys that were provided (non-None), or `{}` when neither is set. The Superset API uses 0-based page indexing.
+`build_list_params` returns `{"q": json.dumps({...})}` with only the keys that were provided (non-None), or `{}` when no list-query args are set. The Superset API uses 0-based page indexing. For shared CLI search, the client emits a `filters` array with `{"col": ..., "opr": "ct", "value": ...}` and forwards explicit `order_column` / `order_direction` values.
 
 Current API methods:
 - `get_current_user()` — returns the unwrapped user object (Superset wraps single-resource responses in `{"result": ...}`; these methods normalize that away)
-- `list_dashboards(page, page_size)` — returns the full list envelope `{"count": ..., "result": [...]}`. Optional `page` (0-based) and `page_size` are forwarded as `q` query params.
+- `get_openapi_spec()` — returns the raw OpenAPI schema payload from `/api/v1/_openapi`
+- `list_dashboards(page, page_size, search, order_column, order_direction)` — returns the full list envelope `{"count": ..., "result": [...]}`. Optional list-query args are forwarded as `q` query params.
 - `get_dashboard()` — returns the unwrapped dashboard object
-- `list_charts(page, page_size)` — returns the full list envelope
+- `get_dashboard_charts()` — returns the unwrapped chart list for one dashboard
+- `get_dashboard_datasets()` — returns the unwrapped dataset list for one dashboard
+- `list_charts(page, page_size, search, order_column, order_direction)` — returns the full list envelope
 - `get_chart()` — returns the unwrapped chart object
-- `list_datasets(page, page_size)` — returns the full list envelope
+- `list_datasets(page, page_size, search, order_column, order_direction)` — returns the full list envelope
 - `get_dataset()` — returns the unwrapped dataset object
-- `list_databases(page, page_size)` — returns the full list envelope
+- `list_databases(page, page_size, search, order_column, order_direction)` — returns the full list envelope
 - `get_database()` — returns the unwrapped database object
+- `get_database_schemas(pk, catalog, force)` — returns the unwrapped schema list for one database
+- `get_database_tables(pk, schema_name, catalog_name, force)` — returns the full table envelope for one database schema
 
 Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope before returning, so callers receive the resource dict directly. List methods (`list_*`) return the full envelope so callers can access both `count` and `result`.
 
@@ -142,9 +148,10 @@ Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope
 
 ### Auth commands
 
-- `auth login <instance>`
+- `auth login <instance> [--browser ...]`
   - code: `src/superset_cli/cli.py`, `src/superset_cli/auth.py`, `src/superset_cli/config.py`
   - tests: `tests/test_auth.py`
+  - notes: reads cookies for the instance host from an installed browser via `browser-cookie3` and writes them to `storage-state.json`. `--browser` choices: `auto` (default), `chrome`, `edge`, `brave`, `firefox`, `zen`, `safari`. `auto` tries each browser in priority order and picks the first with cookies for the target host. See [ADR 0008](../decisions/0008-cookie-extraction-from-installed-browsers.md) for the rationale.
 
 - `auth logout <instance>`
   - code: `src/superset_cli/cli.py`, `src/superset_cli/auth.py`
@@ -158,6 +165,82 @@ Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope
   - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
   - tests: `tests/test_auth_validate.py`
 
+### OpenAPI commands
+
+- `openapi fetch <instance>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_openapi.py`
+
+### Current-user metadata commands
+
+- `me show <instance>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_me.py`
+
+- `me roles <instance>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_me.py`
+
+### Permalink commands
+
+- `permalinks resolve <instance> <kind> <key>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_phase2_special_reads.py`
+
+### Datasource commands
+
+- `datasources column-values <instance> <type> <id> <column>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_phase2_special_reads.py`
+
+### Annotation-layer commands
+
+- `annotation-layers list <instance>`, `annotation-layers get <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_annotation_layers.py`
+
+### CSS-template commands
+
+- `css-templates list <instance>`, `css-templates get <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_css_templates.py`
+
+### Theme commands
+
+- `themes list <instance>`, `themes get <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_themes.py`
+
+### Tag commands
+
+- `tags list <instance>`, `tags get <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_tags.py`
+
+### Report-schedule commands
+
+- `reports list <instance>`, `reports get <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_reports.py`
+
+### Saved-query commands
+
+- `saved-queries list <instance>`, `saved-queries get <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_saved_queries.py`
+
+### Query-history commands
+
+- `queries list <instance>`, `queries get <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_queries.py`
+
+### Log and recent-activity commands
+
+- `logs list <instance>`, `logs get <instance> <pk>`, `logs recent-activity <instance>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_logs.py`
+
 ### Dashboard commands
 
 - `dashboards list <instance>`
@@ -167,6 +250,18 @@ Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope
 - `dashboards get <instance> <id_or_slug>`
   - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
   - tests: `tests/test_dashboards_get.py`
+
+- `dashboards charts <instance> <id_or_slug>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_dashboards_get.py`
+
+- `dashboards datasets <instance> <id_or_slug>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_dashboards_get.py`
+
+- `dashboards embedded <instance> <id_or_slug>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_phase2_special_reads.py`
 
 ### Charts commands
 
@@ -178,6 +273,10 @@ Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope
   - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
   - tests: `tests/test_charts_get.py`
 
+- `charts data <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_chart_data.py`
+
 ### Datasets commands
 
 - `datasets list <instance>`
@@ -187,6 +286,10 @@ Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope
 - `datasets get <instance> <id_or_uuid>`
   - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
   - tests: `tests/test_datasets_get.py`
+
+- `datasets related <instance> <id_or_uuid>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_phase2_special_reads.py`
 
 ### Databases commands
 
@@ -198,25 +301,39 @@ Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope
   - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
   - tests: `tests/test_databases_get.py`
 
+- `databases schemas <instance> <pk>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_databases_get.py`
+
+- `databases tables <instance> <pk> --schema <schema>`
+  - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+  - tests: `tests/test_databases_get.py`
+
 ## Test map
 
 - `tests/test_cli.py` — top-level help and empty `instances list`
 - `tests/test_config.py` — config loading behavior
-- `tests/test_client.py` — storage-state parsing and cookie header formatting
+- `tests/test_client.py` — storage-state parsing, cookie header formatting, and shared client helpers
 - `tests/test_instances_add.py` — instance persistence and visibility in JSON output
 - `tests/test_instances_remove.py` — instance removal from config, isolation from auth state
 - `tests/test_auth.py` — auth login preconditions and browser-login handoff
 - `tests/test_auth_logout.py` — auth logout preconditions and auth state directory removal
 - `tests/test_auth_status.py` — auth-state existence checks and status payload
 - `tests/test_auth_validate.py` — current-user validation flow
+- `tests/test_openapi.py` — OpenAPI spec fetch flow
+- `tests/test_me.py` — current-user metadata reads
 - `tests/test_dashboards.py` — dashboard list flow
-- `tests/test_dashboards_get.py` — dashboard detail flow
+- `tests/test_dashboards_get.py` — dashboard detail flow and dashboard-related chart/dataset reads
 - `tests/test_charts.py` — chart list flow
 - `tests/test_charts_get.py` — chart detail flow
 - `tests/test_datasets.py` — dataset list flow
 - `tests/test_datasets_get.py` — dataset detail flow
 - `tests/test_databases.py` — database list flow
-- `tests/test_databases_get.py` — database detail flow
+- `tests/test_databases_get.py` — database detail flow and schema/table discovery reads
+- `tests/test_annotation_layers.py`, `tests/test_css_templates.py`, `tests/test_themes.py`, `tests/test_tags.py`, `tests/test_reports.py`, `tests/test_saved_queries.py`, `tests/test_queries.py`, `tests/test_logs.py` — list/get read flows for the eight Phase 1 resources
+- `tests/test_phase2_special_reads.py` — embedded dashboard, permalink resolution, dataset related-objects, and datasource column-values
+- `tests/test_chart_data.py` — saved chart data fetch
+- `tests/test_auth_relogin.py` — combined logout-then-login flow
 
 ## Typical change entry points
 
