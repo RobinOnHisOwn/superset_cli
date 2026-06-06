@@ -4,8 +4,8 @@ from pathlib import Path
 import httpx
 from typer.testing import CliRunner
 
-from superset_agent_cli.cli import app
-from superset_agent_cli.client import AuthExpiredError
+from superset_cli.cli import app
+from superset_cli.client import AuthExpiredError
 from fakes import FakeSupersetClient
 
 runner = CliRunner()
@@ -30,7 +30,7 @@ def test_auth_validate_requires_saved_state(tmp_path: Path) -> None:
 def test_auth_validate_returns_json(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", FakeSupersetClient)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", FakeSupersetClient)
 
     result = runner.invoke(
         app,
@@ -61,7 +61,7 @@ def test_auth_validate_auth_expired_prints_message(monkeypatch, instance_setup) 
         def get_current_user(self) -> dict:
             raise AuthExpiredError("Session expired or invalid. Run 'auth login' to re-authenticate.")
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", ExpiredFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", ExpiredFake)
 
     result = runner.invoke(
         app,
@@ -74,7 +74,7 @@ def test_auth_validate_auth_expired_prints_message(monkeypatch, instance_setup) 
 
 def test_auth_validate_returns_human_readable(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", FakeSupersetClient)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", FakeSupersetClient)
 
     result = runner.invoke(
         app,
@@ -105,7 +105,7 @@ def test_auth_validate_network_error_prints_message(monkeypatch, instance_setup)
         def get_current_user(self) -> dict:
             raise httpx.ConnectError("Connection refused")
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", NetworkErrorFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", NetworkErrorFake)
 
     result = runner.invoke(
         app,
@@ -125,7 +125,7 @@ def test_auth_validate_closes_client(monkeypatch, instance_setup) -> None:
             super().__init__(**kwargs)
             captured.append(self)
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", CapturingFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", CapturingFake)
 
     runner.invoke(
         app,

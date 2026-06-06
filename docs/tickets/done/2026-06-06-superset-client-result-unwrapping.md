@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `src/superset_agent_cli/client.py`, `tests/test_client.py`, `docs/architecture/README.md`
+- Related: `src/superset_cli/client.py`, `tests/test_client.py`, `docs/architecture/README.md`
 
 ## Context
 

@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `docs/tickets/todo/2026-06-06-dashboard-related-resources.md`, `src/superset_agent_cli/cli.py`, `src/superset_agent_cli/client.py`, `README.md`, `docs/architecture/README.md`
+- Related: `docs/tickets/todo/2026-06-06-dashboard-related-resources.md`, `src/superset_cli/cli.py`, `src/superset_cli/client.py`, `README.md`, `docs/architecture/README.md`
 
 ## Context
 

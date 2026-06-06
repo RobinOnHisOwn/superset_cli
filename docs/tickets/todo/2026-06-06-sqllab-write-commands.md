@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `docs/tickets/todo/2026-06-06-write-scope-expansion-decision.md`, `docs/decisions/0001-read-only-bootstrap-scope.md`, `src/superset_agent_cli/cli.py`, `src/superset_agent_cli/client.py`
+- Related: `docs/tickets/todo/2026-06-06-write-scope-expansion-decision.md`, `docs/decisions/0001-read-only-bootstrap-scope.md`, `src/superset_cli/cli.py`, `src/superset_cli/client.py`
 
 ## Context
 

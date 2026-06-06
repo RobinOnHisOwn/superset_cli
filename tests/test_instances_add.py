@@ -2,8 +2,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from superset_agent_cli.cli import app
-from superset_agent_cli.config import load_config
+from superset_cli.cli import app
+from superset_cli.config import load_config
 
 runner = CliRunner()
 

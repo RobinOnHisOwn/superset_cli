@@ -6,13 +6,13 @@ from typing import Annotated, Generator
 import httpx
 import typer
 
-from superset_agent_cli.auth import get_auth_status, get_instance_dir, get_profile_dir, get_storage_state_path, login_with_browser, remove_auth_state
-from superset_agent_cli.client import AuthExpiredError, NotFoundError, SupersetClient
-from superset_agent_cli.config import DEFAULT_STATE_DIR, get_instance, load_config, remove_instance, save_config, upsert_instance
-from superset_agent_cli.models import InstanceConfig
+from superset_cli.auth import get_auth_status, get_instance_dir, get_profile_dir, get_storage_state_path, login_with_browser, remove_auth_state
+from superset_cli.client import AuthExpiredError, NotFoundError, SupersetClient
+from superset_cli.config import DEFAULT_STATE_DIR, get_instance, load_config, remove_instance, save_config, upsert_instance
+from superset_cli.models import InstanceConfig
 
 app = typer.Typer(
-    help="Superset agent CLI for self-hosted instances. Read-only bootstrap commands.",
+    help="Superset CLI for self-hosted instances. Read-only bootstrap commands.",
     no_args_is_help=True,
 )
 instances_app = typer.Typer(help="Inspect configured Superset instances.")

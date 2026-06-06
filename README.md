@@ -1,6 +1,6 @@
-# superset-agent-cli
+# superset-cli
 
-Agent-friendly CLI for self-hosted Apache Superset.
+CLI for self-hosted Apache Superset.
 
 ## Scope
 
@@ -38,7 +38,7 @@ If you use `direnv`, allow the repo once and `devenv` will auto-activate wheneve
 direnv allow
 uv sync --group dev
 uv run playwright install chromium
-uv run superset-agent --help
+uv run superset-cli --help
 uv run pytest -v
 ```
 
@@ -51,23 +51,23 @@ devenv shell
 ## Current commands
 
 ```bash
-uv run superset-agent instances add prod https://superset.example.com
-uv run superset-agent instances list --json
-uv run superset-agent instances remove prod --json
-uv run superset-agent auth login prod
-uv run superset-agent auth logout prod --json
-uv run superset-agent auth status prod --json
-uv run superset-agent auth validate prod --json
-uv run superset-agent dashboards list prod --json
-uv run superset-agent dashboards list prod --page 0 --page-size 25 --json
-uv run superset-agent dashboards get prod 7 --json
-uv run superset-agent charts list prod --json
-uv run superset-agent charts list prod --page 1 --page-size 10 --json
-uv run superset-agent charts get prod 42 --json
-uv run superset-agent datasets list prod --json
-uv run superset-agent datasets list prod --page 0 --page-size 50 --json
-uv run superset-agent datasets get prod 5 --json
-uv run superset-agent databases list prod --json
-uv run superset-agent databases list prod --page 0 --page-size 10 --json
-uv run superset-agent databases get prod 1 --json
+uv run superset-cli instances add prod https://superset.example.com
+uv run superset-cli instances list --json
+uv run superset-cli instances remove prod --json
+uv run superset-cli auth login prod
+uv run superset-cli auth logout prod --json
+uv run superset-cli auth status prod --json
+uv run superset-cli auth validate prod --json
+uv run superset-cli dashboards list prod --json
+uv run superset-cli dashboards list prod --page 0 --page-size 25 --json
+uv run superset-cli dashboards get prod 7 --json
+uv run superset-cli charts list prod --json
+uv run superset-cli charts list prod --page 1 --page-size 10 --json
+uv run superset-cli charts get prod 42 --json
+uv run superset-cli datasets list prod --json
+uv run superset-cli datasets list prod --page 0 --page-size 50 --json
+uv run superset-cli datasets get prod 5 --json
+uv run superset-cli databases list prod --json
+uv run superset-cli databases list prod --page 0 --page-size 10 --json
+uv run superset-cli databases get prod 1 --json
 ```

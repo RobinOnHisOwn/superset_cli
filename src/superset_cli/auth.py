@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from superset_agent_cli.client import load_storage_state
+from superset_cli.client import load_storage_state
 
 
 def get_instance_dir(*, state_dir: Path, instance_name: str) -> Path:

@@ -5,7 +5,7 @@
 - Type: decision
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `docs/decisions/0001-read-only-bootstrap-scope.md`, `README.md`, `src/superset_agent_cli/cli.py`
+- Related: `docs/decisions/0001-read-only-bootstrap-scope.md`, `README.md`, `src/superset_cli/cli.py`
 
 ## Context
 

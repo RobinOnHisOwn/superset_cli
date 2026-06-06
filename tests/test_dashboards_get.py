@@ -4,8 +4,8 @@ from pathlib import Path
 import httpx
 from typer.testing import CliRunner
 
-from superset_agent_cli.cli import app
-from superset_agent_cli.client import NotFoundError
+from superset_cli.cli import app
+from superset_cli.client import NotFoundError
 from fakes import FakeSupersetClient
 
 runner = CliRunner()
@@ -43,7 +43,7 @@ def test_dashboards_get_requires_saved_state(tmp_path: Path) -> None:
 def test_dashboards_get_returns_json(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", FakeSupersetClient)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", FakeSupersetClient)
 
     result = runner.invoke(
         app,
@@ -60,7 +60,7 @@ def test_dashboards_get_returns_json(monkeypatch, instance_setup) -> None:
 def test_dashboards_get_returns_human_readable(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", FakeSupersetClient)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", FakeSupersetClient)
 
     result = runner.invoke(
         app,
@@ -81,7 +81,7 @@ def test_dashboards_get_not_found_prints_message(monkeypatch, instance_setup) ->
         def get_dashboard(self, id_or_slug: str) -> dict:
             raise NotFoundError("Resource not found: /api/v1/dashboard/99")
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", NotFoundFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", NotFoundFake)
 
     result = runner.invoke(
         app,
@@ -99,7 +99,7 @@ def test_dashboards_get_network_error_prints_message(monkeypatch, instance_setup
         def get_dashboard(self, id_or_slug: str) -> dict:
             raise httpx.ConnectError("Connection refused")
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", NetworkErrorFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", NetworkErrorFake)
 
     result = runner.invoke(
         app,
@@ -119,7 +119,7 @@ def test_dashboards_get_closes_client(monkeypatch, instance_setup) -> None:
             super().__init__(**kwargs)
             captured.append(self)
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", CapturingFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", CapturingFake)
 
     runner.invoke(
         app,

@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `docs/tickets/todo/2026-06-06-auth-session-expiry-reporting.md`, `docs/decisions/0003-browser-login-with-playwright-and-saved-storage-state.md`, `src/superset_agent_cli/auth.py`, `src/superset_agent_cli/cli.py`, `README.md`, `docs/architecture/README.md`
+- Related: `docs/tickets/todo/2026-06-06-auth-session-expiry-reporting.md`, `docs/decisions/0003-browser-login-with-playwright-and-saved-storage-state.md`, `src/superset_cli/auth.py`, `src/superset_cli/cli.py`, `README.md`, `docs/architecture/README.md`
 
 ## Context
 

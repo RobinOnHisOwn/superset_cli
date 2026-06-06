@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `src/superset_agent_cli/auth.py`, `src/superset_agent_cli/client.py`, `src/superset_agent_cli/cli.py`, `tests/test_auth_status.py`, `tests/test_auth_validate.py`, `docs/decisions/0003-browser-login-with-playwright-and-saved-storage-state.md`, `README.md`, `docs/architecture/README.md`
+- Related: `src/superset_cli/auth.py`, `src/superset_cli/client.py`, `src/superset_cli/cli.py`, `tests/test_auth_status.py`, `tests/test_auth_validate.py`, `docs/decisions/0003-browser-login-with-playwright-and-saved-storage-state.md`, `README.md`, `docs/architecture/README.md`
 
 ## Context
 

@@ -5,7 +5,7 @@
 - Type: research
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `docs/decisions/0003-browser-login-with-playwright-and-saved-storage-state.md`, `src/superset_agent_cli/cli.py`, `src/superset_agent_cli/client.py`, `src/superset_agent_cli/config.py`, `README.md`, `docs/architecture/README.md`
+- Related: `docs/decisions/0003-browser-login-with-playwright-and-saved-storage-state.md`, `src/superset_cli/cli.py`, `src/superset_cli/client.py`, `src/superset_cli/config.py`, `README.md`, `docs/architecture/README.md`
 
 ## Context
 

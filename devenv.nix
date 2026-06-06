@@ -16,7 +16,7 @@
   };
 
   enterShell = ''
-    echo "superset-agent-cli devenv ready"
+    echo "superset-cli devenv ready"
     python --version
     uv --version
   '';

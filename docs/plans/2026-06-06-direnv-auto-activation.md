@@ -58,7 +58,7 @@ Expected: PASS with Python and `uv` available from the activated environment.
 
 Run:
 - `uv run pytest -v`
-- `uv run superset-agent --help`
+- `uv run superset-cli --help`
 - `uv build`
 
 Expected: PASS.

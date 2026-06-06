@@ -2,7 +2,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from superset_agent_cli.cli import app
+from superset_cli.cli import app
 
 runner = CliRunner()
 
@@ -11,7 +11,7 @@ def test_help_shows_read_only_focus() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    assert "Superset agent CLI" in result.stdout
+    assert "Superset CLI" in result.stdout
     assert "read-only" in result.stdout.lower()
 
 

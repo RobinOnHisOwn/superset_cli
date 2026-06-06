@@ -2,7 +2,7 @@
 
 ## Mission
 
-This repository builds `superset-agent-cli`, an agent-friendly CLI for self-hosted Apache Superset.
+This repository builds `superset-cli`, a CLI for self-hosted Apache Superset.
 
 Current product scope is **read-only**:
 - local instance config management
@@ -24,7 +24,7 @@ If instructions conflict or the safest path is unclear, stop and ask.
 
 ## Project map
 
-- `src/superset_agent_cli/` — application code
+- `src/superset_cli/` — application code
 - `tests/` — pytest suite; treat tests as executable spec
 - `docs/index.md` — top-level map of repository documentation
 - `docs/glossary.md` — repository-specific terminology used in docs, plans, and architecture notes
@@ -46,7 +46,7 @@ devenv shell
 uv sync --group dev
 uv run pytest -v
 uv run pytest tests/test_cli.py -v
-uv run superset-agent --help
+uv run superset-cli --help
 uv build
 uv run playwright install chromium
 ```
@@ -130,7 +130,7 @@ Minimum expected verification for most code changes:
 
 ```bash
 uv run pytest -v
-uv run superset-agent --help
+uv run superset-cli --help
 uv build
 ```
 

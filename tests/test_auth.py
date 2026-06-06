@@ -2,7 +2,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from superset_agent_cli.cli import app
+from superset_cli.cli import app
 
 runner = CliRunner()
 
@@ -38,7 +38,7 @@ def test_auth_login_invokes_browser_flow(monkeypatch, tmp_path: Path) -> None:
         captured["profile_dir"] = str(profile_dir)
         captured["storage_state_path"] = str(storage_state_path)
 
-    monkeypatch.setattr("superset_agent_cli.cli.login_with_browser", fake_login)
+    monkeypatch.setattr("superset_cli.cli.login_with_browser", fake_login)
 
     result = runner.invoke(
         app,

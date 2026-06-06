@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-06-05
-- Related: `src/superset_agent_cli/auth.py`, `src/superset_agent_cli/client.py`, `tests/test_auth.py`, `tests/test_auth_validate.py`, `README.md`
+- Related: `src/superset_cli/auth.py`, `src/superset_cli/client.py`, `tests/test_auth.py`, `tests/test_auth_validate.py`, `README.md`
 
 ## Context
 

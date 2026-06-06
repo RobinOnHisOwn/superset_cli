@@ -5,11 +5,11 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `src/superset_agent_cli/cli.py`, `src/superset_agent_cli/client.py`, `README.md`, `docs/architecture/README.md`
+- Related: `src/superset_cli/cli.py`, `src/superset_cli/client.py`, `README.md`, `docs/architecture/README.md`
 
 ## Context
 
-Superset exposes its OpenAPI specification through a dedicated endpoint, but the CLI currently cannot fetch or inspect that schema. For an agent-friendly CLI, access to the live API spec is a useful read-only capability for environment introspection and compatibility checks.
+Superset exposes its OpenAPI specification through a dedicated endpoint, but the CLI currently cannot fetch or inspect that schema. For an CLI, access to the live API spec is a useful read-only capability for environment introspection and compatibility checks.
 
 ## Definition of done
 

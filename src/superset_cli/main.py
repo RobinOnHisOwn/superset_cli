@@ -1,4 +1,4 @@
-from superset_agent_cli.cli import app
+from superset_cli.cli import app
 
 
 def main() -> None:

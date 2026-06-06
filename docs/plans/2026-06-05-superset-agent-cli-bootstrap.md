@@ -2,7 +2,7 @@
 
 > **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 
-**Goal:** Bootstrap a Python-based Superset agent CLI project with uv-managed dependencies and devenv Python support, starting with read-only operations.
+**Goal:** Bootstrap a Python-based Superset CLI project with uv-managed dependencies and devenv Python support, starting with read-only operations.
 
 **Architecture:** Use a minimal `src/` Python package with a Typer entrypoint, small config/auth/client modules, and pytest coverage for basic CLI behavior. Configure devenv to provide Python + uv + automatic `uv sync` so the repo is reproducible for local development.
 
@@ -38,11 +38,11 @@ Expected: pytest can resolve the project environment.
 ### Task 2: Add minimal read-only CLI skeleton
 
 **Files:**
-- Create: `src/superset_agent_cli/__init__.py`
-- Create: `src/superset_agent_cli/cli.py`
-- Create: `src/superset_agent_cli/main.py`
-- Create: `src/superset_agent_cli/config.py`
-- Create: `src/superset_agent_cli/models.py`
+- Create: `src/superset_cli/__init__.py`
+- Create: `src/superset_cli/cli.py`
+- Create: `src/superset_cli/main.py`
+- Create: `src/superset_cli/config.py`
+- Create: `src/superset_cli/models.py`
 
 **Step 1: Write the failing test**
 
@@ -66,7 +66,7 @@ Expected: PASS.
 
 **Files:**
 - Create: `tests/test_config.py`
-- Modify: `src/superset_agent_cli/config.py`
+- Modify: `src/superset_cli/config.py`
 
 **Step 1: Write the failing test**
 
@@ -104,7 +104,7 @@ Expected: PASS with Python/uv environment available.
 
 **Step 3: Manual smoke check**
 
-Run: `uv run superset-agent --help`
+Run: `uv run superset-cli --help`
 Expected: help output for the CLI.
 
 ## Decision follow-up

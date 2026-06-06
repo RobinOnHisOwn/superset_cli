@@ -16,6 +16,19 @@ def test_envrc_configures_direnv_for_devenv() -> None:
     assert "use devenv" in content
 
 
+def test_pyproject_exposes_superset_cli_command() -> None:
+    pyproject_path = REPO_ROOT / "pyproject.toml"
+
+    assert pyproject_path.exists()
+
+    content = pyproject_path.read_text()
+    assert 'name = "superset-cli"' in content
+    assert 'superset-cli = "superset_cli.main:main"' in content
+    assert 'superset-agent' not in content
+    assert 'superset_agent_cli.main:main' not in content
+
+
+
 def test_ci_workflow_runs_expected_uv_checks() -> None:
     workflow_path = REPO_ROOT / ".github/workflows/ci.yml"
 
@@ -29,6 +42,6 @@ def test_ci_workflow_runs_expected_uv_checks() -> None:
     assert workflow["jobs"]["test"]["strategy"]["matrix"]["python-version"] == ["3.12", "3.13"]
     assert "uv sync --locked --group dev" in content
     assert "uv run pytest -v" in content
-    assert "uv run superset-agent --help" in content
+    assert "uv run superset-cli --help" in content
     assert "uv build" in content
-    assert "uv run --isolated --no-project --with dist/*.whl superset-agent --help" in content
+    assert "uv run --isolated --no-project --with dist/*.whl superset-cli --help" in content

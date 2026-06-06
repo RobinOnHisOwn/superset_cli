@@ -5,7 +5,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from superset_agent_cli.client import AuthExpiredError, NotFoundError, SupersetClient, build_cookie_header, build_list_params, load_storage_state
+from superset_cli.client import AuthExpiredError, NotFoundError, SupersetClient, build_cookie_header, build_list_params, load_storage_state
 from fakes import FakeSupersetClient
 
 

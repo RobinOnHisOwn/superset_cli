@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `src/superset_agent_cli/config.py`, `src/superset_agent_cli/cli.py`, `tests/test_instances_remove.py`, `tests/test_auth.py`, `tests/test_dashboards.py`
+- Related: `src/superset_cli/config.py`, `src/superset_cli/cli.py`, `tests/test_instances_remove.py`, `tests/test_auth.py`, `tests/test_dashboards.py`
 
 ## Context
 

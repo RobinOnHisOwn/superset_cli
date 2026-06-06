@@ -23,9 +23,9 @@ Add a test that asserts `.github/workflows/ci.yml` exists and contains the expec
 - uses a Python matrix with `3.12` and `3.13`
 - runs `uv sync --locked --group dev`
 - runs `uv run pytest -v`
-- runs `uv run superset-agent --help`
+- runs `uv run superset-cli --help`
 - runs `uv build`
-- runs a wheel smoke test with `uv run --isolated --no-project --with dist/*.whl superset-agent --help`
+- runs a wheel smoke test with `uv run --isolated --no-project --with dist/*.whl superset-cli --help`
 
 **Step 2: Run test to verify it fails**
 
@@ -77,7 +77,7 @@ Expected: PASS.
 
 Run:
 - `uv run pytest -v`
-- `uv run superset-agent --help`
+- `uv run superset-cli --help`
 - `uv build`
 
 Expected: PASS.

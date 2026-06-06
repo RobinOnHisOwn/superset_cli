@@ -5,7 +5,7 @@
 - Type: research
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `src/superset_agent_cli/cli.py`, `src/superset_agent_cli/config.py`, `src/superset_agent_cli/models.py`, `README.md`, `docs/decisions/0001-read-only-bootstrap-scope.md`
+- Related: `src/superset_cli/cli.py`, `src/superset_cli/config.py`, `src/superset_cli/models.py`, `README.md`, `docs/decisions/0001-read-only-bootstrap-scope.md`
 
 ## Context
 

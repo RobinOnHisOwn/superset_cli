@@ -13,8 +13,8 @@
 ### Task 1: Add detail commands for charts, datasets, and databases
 
 **Files:**
-- Modify: `src/superset_agent_cli/client.py`
-- Modify: `src/superset_agent_cli/cli.py`
+- Modify: `src/superset_cli/client.py`
+- Modify: `src/superset_cli/cli.py`
 - Create: `tests/test_charts_get.py`
 - Create: `tests/test_datasets_get.py`
 - Create: `tests/test_databases_get.py`
@@ -59,8 +59,8 @@ Expected: PASS.
 ### Task 2: Add user-friendly API error handling for auth expiry, 404s, and network failures
 
 **Files:**
-- Modify: `src/superset_agent_cli/client.py`
-- Modify: `src/superset_agent_cli/cli.py`
+- Modify: `src/superset_cli/client.py`
+- Modify: `src/superset_cli/cli.py`
 - Create or modify: `tests/test_auth_validate.py`
 - Modify: `tests/test_dashboards.py`
 - Modify: `tests/test_dashboards_get.py`
@@ -95,8 +95,8 @@ Expected: PASS.
 ### Task 3: Add pagination and list-query controls without changing existing JSON payload shape
 
 **Files:**
-- Modify: `src/superset_agent_cli/client.py`
-- Modify: `src/superset_agent_cli/cli.py`
+- Modify: `src/superset_cli/client.py`
+- Modify: `src/superset_cli/cli.py`
 - Modify: `tests/test_dashboards.py`
 - Modify: `tests/test_charts.py`
 - Modify: `tests/test_datasets.py`
@@ -131,9 +131,9 @@ Expected: PASS.
 ### Task 4: Complete local-state lifecycle commands
 
 **Files:**
-- Modify: `src/superset_agent_cli/config.py`
-- Modify: `src/superset_agent_cli/auth.py`
-- Modify: `src/superset_agent_cli/cli.py`
+- Modify: `src/superset_cli/config.py`
+- Modify: `src/superset_cli/auth.py`
+- Modify: `src/superset_cli/cli.py`
 - Create: `tests/test_instances_remove.py`
 - Create: `tests/test_auth_logout.py`
 - Modify: `README.md`
@@ -211,7 +211,7 @@ Expected: PASS.
 
 Run:
 - `uv run pytest -v`
-- `uv run superset-agent --help`
+- `uv run superset-cli --help`
 - `uv build`
 
 Expected: PASS.

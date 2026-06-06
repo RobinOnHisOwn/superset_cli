@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `src/superset_agent_cli/cli.py`, `src/superset_agent_cli/auth.py`, `tests/test_auth_logout.py`, `docs/architecture/README.md`
+- Related: `src/superset_cli/cli.py`, `src/superset_cli/auth.py`, `tests/test_auth_logout.py`, `docs/architecture/README.md`
 
 ## Context
 

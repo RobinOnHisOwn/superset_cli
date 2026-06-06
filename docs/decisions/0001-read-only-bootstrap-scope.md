@@ -2,11 +2,11 @@
 
 - Status: accepted
 - Date: 2026-06-05
-- Related: `README.md`, `src/superset_agent_cli/cli.py`, `tests/test_cli.py`, `docs/plans/2026-06-05-superset-agent-cli-bootstrap.md`
+- Related: `README.md`, `src/superset_cli/cli.py`, `tests/test_cli.py`, `docs/plans/2026-06-05-superset-cli-bootstrap.md`
 
 ## Context
 
-This repository started as a bootstrap for an agent-friendly CLI for self-hosted Apache Superset. Early work needed a narrow scope so the project could establish packaging, configuration, CLI patterns, tests, and authentication scaffolding without taking on write-side risk or broad API surface area.
+This repository started as a bootstrap for an CLI for self-hosted Apache Superset. Early work needed a narrow scope so the project could establish packaging, configuration, CLI patterns, tests, and authentication scaffolding without taking on write-side risk or broad API surface area.
 
 ## Decision
 

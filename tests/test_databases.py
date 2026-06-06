@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 from typer.testing import CliRunner
 
-from superset_agent_cli.cli import app
+from superset_cli.cli import app
 from fakes import FakeSupersetClient
 
 runner = CliRunner()
@@ -42,7 +42,7 @@ def test_databases_list_requires_saved_state(tmp_path: Path) -> None:
 def test_databases_list_returns_json(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", FakeSupersetClient)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", FakeSupersetClient)
 
     result = runner.invoke(
         app,
@@ -69,7 +69,7 @@ def test_databases_list_network_error_prints_message(monkeypatch, instance_setup
         def list_databases(self, *, page=None, page_size=None):
             raise httpx.ConnectError("Connection refused")
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", NetworkErrorFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", NetworkErrorFake)
 
     result = runner.invoke(
         app,
@@ -89,7 +89,7 @@ def test_databases_list_closes_client(monkeypatch, instance_setup) -> None:
             super().__init__(**kwargs)
             captured.append(self)
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", CapturingFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", CapturingFake)
 
     result = runner.invoke(
         app,
@@ -102,7 +102,7 @@ def test_databases_list_closes_client(monkeypatch, instance_setup) -> None:
 
 def test_databases_list_accepts_page_flags(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", FakeSupersetClient)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", FakeSupersetClient)
 
     result = runner.invoke(
         app,
@@ -124,7 +124,7 @@ def test_databases_list_forwards_page_to_client(monkeypatch, instance_setup) -> 
             captured.append({"page": page, "page_size": page_size})
             return super().list_databases(page=page, page_size=page_size)
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", CapturingFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", CapturingFake)
 
     result = runner.invoke(
         app,
@@ -145,7 +145,7 @@ def test_databases_list_empty_returns_message(monkeypatch, instance_setup) -> No
         def list_databases(self, *, page=None, page_size=None):
             return {"count": 0, "result": []}
 
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", EmptyFake)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", EmptyFake)
 
     result = runner.invoke(
         app,
@@ -158,7 +158,7 @@ def test_databases_list_empty_returns_message(monkeypatch, instance_setup) -> No
 
 def test_databases_list_returns_human_readable(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", FakeSupersetClient)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", FakeSupersetClient)
 
     result = runner.invoke(
         app,
@@ -172,7 +172,7 @@ def test_databases_list_returns_human_readable(monkeypatch, instance_setup) -> N
 
 def test_databases_list_json_shape_unchanged_with_pagination(monkeypatch, instance_setup) -> None:
     config_path, state_dir = instance_setup
-    monkeypatch.setattr("superset_agent_cli.cli.SupersetClient", FakeSupersetClient)
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", FakeSupersetClient)
 
     result = runner.invoke(
         app,

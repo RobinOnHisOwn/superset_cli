@@ -2,11 +2,11 @@ from pathlib import Path
 
 import yaml
 
-from superset_agent_cli.models import Config, InstanceConfig
+from superset_cli.models import Config, InstanceConfig
 
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "superset-agent-cli" / "config.yaml"
-DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "superset-agent-cli"
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "superset-cli" / "config.yaml"
+DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "superset-cli"
 
 
 def load_config(path: Path | None = None) -> Config:

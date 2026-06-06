@@ -63,3 +63,4 @@ For a copyable starting point, use `../templates/decision-record-template.md`.
 - [0004: Decision memory system](./0004-decision-memory-system.md)
 - [0005: Architecture reference document](./0005-architecture-reference-document.md)
 - [0006: Markdown ticket system](./0006-markdown-ticket-system.md)
+- [0007: Superset CLI product and package name](./0007-superset-cli-product-and-package-name.md)

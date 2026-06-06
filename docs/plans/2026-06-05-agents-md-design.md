@@ -28,7 +28,7 @@ The `AGENTS.md` file should:
 ## Repo-specific rules to encode
 
 - prefer `devenv shell` and `uv`
-- source lives in `src/superset_agent_cli/`
+- source lives in `src/superset_cli/`
 - tests live in `tests/`
 - plans live in `docs/plans/`
 - preserve CLI JSON output contracts unless intentionally changed
@@ -42,7 +42,7 @@ The `AGENTS.md` file should:
 For code changes, agents should verify with:
 - targeted pytest commands first
 - `uv run pytest -v`
-- `uv run superset-agent --help`
+- `uv run superset-cli --help`
 - `uv build`
 
 For auth/browser/live-instance work, agents should also log exact commands used and state any remaining unverified risk.

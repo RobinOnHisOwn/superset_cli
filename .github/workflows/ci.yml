@@ -44,10 +44,10 @@ jobs:
         run: uv run pytest -v
 
       - name: Smoke-test CLI help
-        run: uv run superset-agent --help
+        run: uv run superset-cli --help
 
       - name: Build distributions
         run: uv build
 
       - name: Smoke-test built wheel
-        run: uv run --isolated --no-project --with dist/*.whl superset-agent --help
+        run: uv run --isolated --no-project --with dist/*.whl superset-cli --help

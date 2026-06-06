@@ -5,11 +5,11 @@
 - Type: research
 - Created by: agent
 - Created at: 2026-06-06
-- Related: `src/superset_agent_cli/cli.py`, `src/superset_agent_cli/client.py`, `docs/decisions/0001-read-only-bootstrap-scope.md`, `README.md`, `docs/architecture/README.md`
+- Related: `src/superset_cli/cli.py`, `src/superset_cli/client.py`, `docs/decisions/0001-read-only-bootstrap-scope.md`, `README.md`, `docs/architecture/README.md`
 
 ## Context
 
-Superset exposes many read endpoints for security and administration, including roles, users, groups, permissions, resources, and row-level security. The CLI currently exposes none of them. Because this surface is broad and potentially sensitive, the repository should first decide which subset belongs in an agent-friendly CLI.
+Superset exposes many read endpoints for security and administration, including roles, users, groups, permissions, resources, and row-level security. The CLI currently exposes none of them. Because this surface is broad and potentially sensitive, the repository should first decide which subset belongs in an CLI.
 
 ## Definition of done
 
