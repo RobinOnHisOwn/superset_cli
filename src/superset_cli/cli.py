@@ -12,7 +12,7 @@ from superset_cli.config import DEFAULT_STATE_DIR, get_instance, load_config, re
 from superset_cli.models import InstanceConfig
 
 app = typer.Typer(
-    help="Superset CLI for self-hosted instances. Read-only bootstrap commands.",
+    help="Superset CLI for self-hosted instances. Read commands are unrestricted; every write command requires --allow-write per invocation.",
     no_args_is_help=True,
 )
 instances_app = typer.Typer(help="Inspect configured Superset instances.")
@@ -33,6 +33,10 @@ reports_app = typer.Typer(help="Read report schedules from a configured Superset
 saved_queries_app = typer.Typer(help="Read saved SQL queries from a configured Superset instance.")
 queries_app = typer.Typer(help="Read SQL Lab query history from a configured Superset instance.")
 logs_app = typer.Typer(help="Read action logs and recent activity from a configured Superset instance.")
+sqllab_app = typer.Typer(help="SQL Lab execute, estimate, format, and stop. Write commands require --allow-write.")
+security_app = typer.Typer(help="Security/admin write commands (roles, users, RLS). All require --allow-write.")
+rls_app = typer.Typer(help="Row-level security rule writes. Require --allow-write.")
+import_app = typer.Typer(help="Server-side asset imports via multipart upload. Require --allow-write.")
 app.add_typer(instances_app, name="instances")
 app.add_typer(auth_app, name="auth")
 app.add_typer(openapi_app, name="openapi")
@@ -51,6 +55,10 @@ app.add_typer(reports_app, name="reports")
 app.add_typer(saved_queries_app, name="saved-queries")
 app.add_typer(queries_app, name="queries")
 app.add_typer(logs_app, name="logs")
+app.add_typer(sqllab_app, name="sqllab")
+app.add_typer(security_app, name="security")
+security_app.add_typer(rls_app, name="rls")
+app.add_typer(import_app, name="import")
 
 
 @app.callback()
@@ -1299,3 +1307,821 @@ def charts_data(
             rowcount = len(data)
         cols = query.get("colnames") or []
         typer.echo(f"  [{idx}] rows={rowcount} columns={','.join(cols)}")
+
+
+# ----- write-command infrastructure (ADR 0009, 0010) -----
+
+_ALLOW_WRITE_HELP = (
+    "Required to actually perform the write. Without it the command is a dry-run."
+)
+_ALLOW_WRITE_OPT = typer.Option("--allow-write", help=_ALLOW_WRITE_HELP)
+_BODY_OPT = typer.Option("--body", help="JSON request body. Use '-' to read from stdin.")
+_FILE_OPT = typer.Option("--file", help="Path to a JSON or ZIP file for the request payload.")
+
+
+def _require_allow_write(allow_write: bool, *, action: str) -> None:
+    if allow_write:
+        return
+    typer.echo(
+        f"This would {action}. Re-run with --allow-write to perform the write."
+    )
+    raise typer.Exit(code=1)
+
+
+def _load_body(body: str | None, file: Path | None) -> dict:
+    if body is None and file is None:
+        return {}
+    if body is not None and file is not None:
+        typer.echo("Pass either --body or --file, not both.")
+        raise typer.Exit(code=2)
+    if body is not None:
+        if body == "-":
+            import sys
+            body = sys.stdin.read()
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError as exc:
+            typer.echo(f"Invalid JSON for --body: {exc}")
+            raise typer.Exit(code=2)
+    try:
+        return json.loads(file.read_text())
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Invalid JSON in --file: {exc}")
+        raise typer.Exit(code=2)
+
+
+def _run_write(
+    *,
+    instance_name: str,
+    state_dir: Path,
+    ctx: typer.Context,
+    call,
+    as_json: bool,
+    human_line: str,
+) -> None:
+    instance = _require_instance(ctx, instance_name)
+    storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+    with _api_errors():
+        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+            payload = call(client)
+    if as_json:
+        typer.echo(json.dumps(payload, separators=(",", ":")))
+        return
+    typer.echo(human_line)
+
+
+# ----- charts -----
+
+@charts_app.command("create")
+def charts_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a chart on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_chart(payload_body),
+        human_line="Created chart.",
+    )
+
+
+@charts_app.command("update")
+def charts_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update chart {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_chart(pk, payload_body),
+        human_line=f"Updated chart {pk}.",
+    )
+
+
+@charts_app.command("delete")
+def charts_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete chart {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_chart(pk),
+        human_line=f"Deleted chart {pk}.",
+    )
+
+
+@charts_app.command("favorite")
+def charts_favorite(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"favorite chart {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.favorite_chart(pk),
+        human_line=f"Favorited chart {pk}.",
+    )
+
+
+@charts_app.command("unfavorite")
+def charts_unfavorite(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"unfavorite chart {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.unfavorite_chart(pk),
+        human_line=f"Unfavorited chart {pk}.",
+    )
+
+
+# ----- dashboards -----
+
+@dashboards_app.command("create")
+def dashboards_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a dashboard on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_dashboard(payload_body),
+        human_line="Created dashboard.",
+    )
+
+
+@dashboards_app.command("update")
+def dashboards_update(
+    ctx: typer.Context, instance_name: str, id_or_slug: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update dashboard {id_or_slug} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_dashboard(id_or_slug, payload_body),
+        human_line=f"Updated dashboard {id_or_slug}.",
+    )
+
+
+@dashboards_app.command("delete")
+def dashboards_delete(
+    ctx: typer.Context, instance_name: str, id_or_slug: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete dashboard {id_or_slug} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_dashboard(id_or_slug),
+        human_line=f"Deleted dashboard {id_or_slug}.",
+    )
+
+
+@dashboards_app.command("favorite")
+def dashboards_favorite(
+    ctx: typer.Context, instance_name: str, id_or_slug: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"favorite dashboard {id_or_slug} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.favorite_dashboard(id_or_slug),
+        human_line=f"Favorited dashboard {id_or_slug}.",
+    )
+
+
+@dashboards_app.command("unfavorite")
+def dashboards_unfavorite(
+    ctx: typer.Context, instance_name: str, id_or_slug: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"unfavorite dashboard {id_or_slug} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.unfavorite_dashboard(id_or_slug),
+        human_line=f"Unfavorited dashboard {id_or_slug}.",
+    )
+
+
+@dashboards_app.command("copy")
+def dashboards_copy(
+    ctx: typer.Context, instance_name: str, id_or_slug: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"copy dashboard {id_or_slug} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.copy_dashboard(id_or_slug, payload_body),
+        human_line=f"Copied dashboard {id_or_slug}.",
+    )
+
+
+# ----- datasets -----
+
+@datasets_app.command("create")
+def datasets_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a dataset on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_dataset(payload_body),
+        human_line="Created dataset.",
+    )
+
+
+@datasets_app.command("update")
+def datasets_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update dataset {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_dataset(pk, payload_body),
+        human_line=f"Updated dataset {pk}.",
+    )
+
+
+@datasets_app.command("delete")
+def datasets_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete dataset {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_dataset(pk),
+        human_line=f"Deleted dataset {pk}.",
+    )
+
+
+@datasets_app.command("refresh")
+def datasets_refresh(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"refresh dataset {pk} columns on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.refresh_dataset(pk),
+        human_line=f"Refreshed dataset {pk}.",
+    )
+
+
+# ----- databases -----
+
+@databases_app.command("create")
+def databases_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a database on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_database(payload_body),
+        human_line="Created database.",
+    )
+
+
+@databases_app.command("update")
+def databases_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update database {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_database(pk, payload_body),
+        human_line=f"Updated database {pk}.",
+    )
+
+
+@databases_app.command("delete")
+def databases_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete database {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_database(pk),
+        human_line=f"Deleted database {pk}.",
+    )
+
+
+@databases_app.command("test-connection")
+def databases_test_connection(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"send a database test-connection request to instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.test_database_connection(payload_body),
+        human_line="Test connection sent.",
+    )
+
+
+# ----- saved queries -----
+
+@saved_queries_app.command("create")
+def saved_queries_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a saved query on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_saved_query(payload_body),
+        human_line="Created saved query.",
+    )
+
+
+@saved_queries_app.command("update")
+def saved_queries_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update saved query {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_saved_query(pk, payload_body),
+        human_line=f"Updated saved query {pk}.",
+    )
+
+
+@saved_queries_app.command("delete")
+def saved_queries_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete saved query {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_saved_query(pk),
+        human_line=f"Deleted saved query {pk}.",
+    )
+
+
+# ----- sqllab -----
+
+@sqllab_app.command("execute")
+def sqllab_execute(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"execute SQL via SQL Lab on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.execute_sql(payload_body),
+        human_line="SQL executed.",
+    )
+
+
+@sqllab_app.command("format-sql")
+def sqllab_format_sql(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"format SQL via SQL Lab on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.format_sql(payload_body),
+        human_line="SQL formatted.",
+    )
+
+
+@sqllab_app.command("estimate")
+def sqllab_estimate(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"estimate SQL cost via SQL Lab on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.estimate_sql(payload_body),
+        human_line="SQL estimate requested.",
+    )
+
+
+@sqllab_app.command("stop-query")
+def sqllab_stop_query(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"stop a SQL Lab query on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.stop_sql_query(payload_body),
+        human_line="Stop request sent.",
+    )
+
+
+# ----- tags -----
+
+@tags_app.command("create")
+def tags_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a tag on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_tag(payload_body),
+        human_line="Created tag.",
+    )
+
+
+@tags_app.command("update")
+def tags_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update tag {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_tag(pk, payload_body),
+        human_line=f"Updated tag {pk}.",
+    )
+
+
+@tags_app.command("delete")
+def tags_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete tag {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_tag(pk),
+        human_line=f"Deleted tag {pk}.",
+    )
+
+
+# ----- themes -----
+
+@themes_app.command("create")
+def themes_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a theme on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_theme(payload_body),
+        human_line="Created theme.",
+    )
+
+
+@themes_app.command("update")
+def themes_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update theme {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_theme(pk, payload_body),
+        human_line=f"Updated theme {pk}.",
+    )
+
+
+@themes_app.command("delete")
+def themes_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete theme {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_theme(pk),
+        human_line=f"Deleted theme {pk}.",
+    )
+
+
+# ----- security: roles -----
+
+@security_app.command("role-create")
+def security_role_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a security role on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_role(payload_body),
+        human_line="Created role.",
+    )
+
+
+@security_app.command("role-update")
+def security_role_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update security role {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_role(pk, payload_body),
+        human_line=f"Updated role {pk}.",
+    )
+
+
+@security_app.command("role-delete")
+def security_role_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete security role {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_role(pk),
+        human_line=f"Deleted role {pk}.",
+    )
+
+
+# ----- security: users -----
+
+@security_app.command("user-create")
+def security_user_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a security user on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_user(payload_body),
+        human_line="Created user.",
+    )
+
+
+@security_app.command("user-update")
+def security_user_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update security user {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_user(pk, payload_body),
+        human_line=f"Updated user {pk}.",
+    )
+
+
+@security_app.command("user-delete")
+def security_user_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete security user {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_user(pk),
+        human_line=f"Deleted user {pk}.",
+    )
+
+
+# ----- security: rls -----
+
+@rls_app.command("create")
+def security_rls_create(
+    ctx: typer.Context, instance_name: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"create a row-level security rule on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.create_rls_rule(payload_body),
+        human_line="Created RLS rule.",
+    )
+
+
+@rls_app.command("update")
+def security_rls_update(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    payload_body = _load_body(body, file)
+    _require_allow_write(allow_write, action=f"update row-level security rule {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.update_rls_rule(pk, payload_body),
+        human_line=f"Updated RLS rule {pk}.",
+    )
+
+
+@rls_app.command("delete")
+def security_rls_delete(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"delete row-level security rule {pk} on instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.delete_rls_rule(pk),
+        human_line=f"Deleted RLS rule {pk}.",
+    )
+
+
+# ----- asset import -----
+
+_IMPORT_RESOURCES = {"dashboard", "chart", "dataset", "database", "saved_query"}
+
+
+@import_app.command("upload")
+def import_upload(
+    ctx: typer.Context,
+    instance_name: str,
+    resource: str,
+    file: Annotated[Path, typer.Option("--file", help="Path to the import ZIP bundle.")],
+    passwords: Annotated[str | None, typer.Option("--passwords", help="JSON object mapping file paths to passwords.")] = None,
+    overwrite: Annotated[bool, typer.Option("--overwrite", help="Overwrite existing assets with matching identifiers.")] = False,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    if resource not in _IMPORT_RESOURCES:
+        typer.echo(
+            f"Unsupported import resource '{resource}'. Use one of: {', '.join(sorted(_IMPORT_RESOURCES))}."
+        )
+        raise typer.Exit(code=2)
+    if not file.exists():
+        typer.echo(f"Import file not found: {file}")
+        raise typer.Exit(code=2)
+    passwords_payload: dict | None = None
+    if passwords is not None:
+        try:
+            passwords_payload = json.loads(passwords)
+        except json.JSONDecodeError as exc:
+            typer.echo(f"Invalid JSON for --passwords: {exc}")
+            raise typer.Exit(code=2)
+    _require_allow_write(allow_write, action=f"import {resource} bundle '{file.name}' to instance '{instance_name}'")
+    _run_write(
+        instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        call=lambda c: c.import_assets(
+            resource, file_path=file, passwords=passwords_payload, overwrite=overwrite,
+        ),
+        human_line=f"Imported {resource} bundle from {file.name}.",
+    )

@@ -4,14 +4,13 @@ CLI for self-hosted Apache Superset.
 
 ## Scope
 
-Current bootstrap scope:
+Current scope (read by default, write opt-in):
 - Python project managed with `uv`
 - `devenv` shell configured for Python + uv
-- read-only CLI skeleton
 - local instance config management (add, list, remove)
-- Playwright-based browser login scaffold
-- saved auth-state inspection and API validation
-- read-only dashboard/chart/dataset/database access via Superset REST API, including dashboard-related charts/datasets, database schema/table discovery, and live OpenAPI spec fetches
+- browser-cookie import login + saved auth-state inspection and API validation
+- read access to dashboards, charts, datasets, databases, annotation layers, CSS templates, themes, tags, reports, saved queries, queries, logs, permalinks, OpenAPI, embedded configs, related objects, chart data
+- write access to chart, dashboard, dataset, database, saved-query, SQL Lab, tag, theme, security (roles, users, RLS), and asset-import surfaces; **every write command requires `--allow-write` on every invocation** (see [ADR 0009](docs/decisions/0009-write-command-explicit-opt-in.md) and [ADR 0010](docs/decisions/0010-write-scope-expansion.md))
 - shared list-query controls on all list commands via `--page` (0-based), `--page-size`, `--search`, `--order-column`, and `--order-direction`
 - user-friendly error messages for auth expiry, missing resources, and network failures (exit code 1, no raw tracebacks)
 
@@ -105,3 +104,72 @@ uv run superset-cli logs recent-activity prod --json
 uv run superset-cli permalinks resolve prod dashboard abc123 --json
 uv run superset-cli datasources column-values prod table 21 country --json
 ```
+
+## Write commands
+
+Every command in the table below requires `--allow-write` on every invocation. Without it the command prints what it *would* do and exits non-zero (dry-run by default).
+
+```bash
+# Charts
+uv run superset-cli charts create     prod --body '{"slice_name":"Revenue","viz_type":"line"}' --allow-write
+uv run superset-cli charts update     prod 42 --body '{"slice_name":"Revenue v2"}' --allow-write
+uv run superset-cli charts delete     prod 42 --allow-write
+uv run superset-cli charts favorite   prod 42 --allow-write
+uv run superset-cli charts unfavorite prod 42 --allow-write
+
+# Dashboards
+uv run superset-cli dashboards create     prod --file dashboard.json --allow-write
+uv run superset-cli dashboards update     prod 7  --body '{"published":true}' --allow-write
+uv run superset-cli dashboards delete     prod 7  --allow-write
+uv run superset-cli dashboards favorite   prod 7  --allow-write
+uv run superset-cli dashboards unfavorite prod 7  --allow-write
+uv run superset-cli dashboards copy       prod 7  --body '{"dashboard_title":"Revenue (copy)"}' --allow-write
+
+# Datasets
+uv run superset-cli datasets create  prod --file dataset.json --allow-write
+uv run superset-cli datasets update  prod 21 --body '{"description":"updated"}' --allow-write
+uv run superset-cli datasets delete  prod 21 --allow-write
+uv run superset-cli datasets refresh prod 21 --allow-write
+
+# Databases
+uv run superset-cli databases create          prod --file database.json --allow-write
+uv run superset-cli databases update          prod 1 --body '{"expose_in_sqllab":true}' --allow-write
+uv run superset-cli databases delete          prod 1 --allow-write
+uv run superset-cli databases test-connection prod --file connection.json --allow-write
+
+# Saved queries
+uv run superset-cli saved-queries create prod --body '{"label":"q1","sql":"select 1"}' --allow-write
+uv run superset-cli saved-queries update prod 9 --body '{"label":"q1-v2"}' --allow-write
+uv run superset-cli saved-queries delete prod 9 --allow-write
+
+# SQL Lab
+uv run superset-cli sqllab execute    prod --body '{"database_id":1,"sql":"select 1"}' --allow-write
+uv run superset-cli sqllab format-sql prod --body '{"sql":"select 1"}' --allow-write
+uv run superset-cli sqllab estimate   prod --body '{"database_id":1,"sql":"select 1"}' --allow-write
+uv run superset-cli sqllab stop-query prod --body '{"client_id":"abc"}' --allow-write
+
+# Tags, themes
+uv run superset-cli tags create   prod --body '{"name":"finance"}' --allow-write
+uv run superset-cli tags update   prod 1 --body '{"name":"finance-v2"}' --allow-write
+uv run superset-cli tags delete   prod 1 --allow-write
+uv run superset-cli themes create prod --body '{"theme_name":"Dark"}' --allow-write
+uv run superset-cli themes update prod 1 --body '{"theme_name":"Dark v2"}' --allow-write
+uv run superset-cli themes delete prod 1 --allow-write
+
+# Security: roles, users, RLS rules
+uv run superset-cli security role-create prod --body '{"name":"Analyst"}' --allow-write
+uv run superset-cli security role-update prod 5 --body '{"name":"Analyst v2"}' --allow-write
+uv run superset-cli security role-delete prod 5 --allow-write
+uv run superset-cli security user-create prod --file user.json --allow-write
+uv run superset-cli security user-update prod 2 --body '{"active":false}' --allow-write
+uv run superset-cli security user-delete prod 2 --allow-write
+uv run superset-cli security rls create  prod --file rls.json --allow-write
+uv run superset-cli security rls update  prod 3 --body '{"name":"updated"}' --allow-write
+uv run superset-cli security rls delete  prod 3 --allow-write
+
+# Asset import (server-side multipart upload)
+uv run superset-cli import upload prod dashboard --file bundle.zip --allow-write
+uv run superset-cli import upload prod chart     --file bundle.zip --overwrite --passwords '{"db.zip":"hunter2"}' --allow-write
+```
+
+Both `--body '<json>'` and `--file <path-to-json>` accept the request payload. Pass `--body -` to read JSON from stdin. The two flags are mutually exclusive.

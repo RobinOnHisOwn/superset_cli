@@ -4,11 +4,12 @@
 
 `superset-cli` is a Python CLI for self-hosted Apache Superset.
 
-Current scope is intentionally read-only:
+Current scope is read by default, write opt-in:
 - manage local Superset instance configuration (add, list, remove)
-- launch browser-based login, remove local auth state, and save auth state locally
-- inspect and validate saved auth state
-- read dashboards, dashboard-related charts/datasets, charts, datasets, databases, database schemas/tables, and the live OpenAPI spec through the Superset REST API
+- browser-cookie import login, remove local auth state, and inspect saved auth state
+- read dashboards, charts, datasets, databases, annotation layers, CSS templates, themes, tags, reports, saved queries, queries, logs, permalinks, embedded dashboards, related objects, chart data, and the live OpenAPI spec
+- write to charts, dashboards, datasets, databases, saved queries, SQL Lab, tags, themes, security roles/users/RLS, and asset-import surfaces
+- every write command requires the literal `--allow-write` flag on every invocation per [ADR 0009](../decisions/0009-write-command-explicit-opt-in.md) and [ADR 0010](../decisions/0010-write-scope-expansion.md)
 - paginate and refine list results with `--page` (0-based index), `--page-size`, `--search`, `--order-column`, and `--order-direction` CLI flags
 
 This document explains how the current code is organized. For repository rationale, read `docs/decisions/`. For agent workflow rules, read `AGENTS.md`.
@@ -59,10 +60,22 @@ Current command groups:
 - `instances`
 - `auth`
 - `openapi`
-- `dashboards`
-- `charts`
-- `datasets`
-- `databases`
+- `me`
+- `dashboards` (read + write)
+- `charts` (read + write)
+- `datasets` (read + write)
+- `databases` (read + write)
+- `permalinks`, `datasources`, `annotation-layers`, `css-templates`
+- `themes` (read + write)
+- `tags` (read + write)
+- `reports`
+- `saved-queries` (read + write)
+- `queries`, `logs`
+- `sqllab` (write-only group: execute, format-sql, estimate, stop-query)
+- `security` (write-only group: roles, users, RLS via `security rls`)
+- `import` (write-only group: server-side multipart asset bundles)
+
+Write-command policy is enforced by the shared `_require_allow_write(...)` helper in `cli.py`. It is called by every write command before the API call. Without `--allow-write`, the command exits 1 with a message naming the would-be mutation and the missing flag, and no HTTP request is sent. Request bodies for write commands are loaded by the shared `_load_body(body, file)` helper, which accepts `--body '<json>'`, `--body -` (stdin), or `--file <path-to-json>`.
 
 All four list commands (`dashboards list`, `charts list`, `datasets list`, `databases list`) accept optional `--page` (0-based integer), `--page-size`, `--search`, `--order-column`, and `--order-direction` flags. `--search` maps to each resource's primary name/title field using Superset contains filtering, while ordering flags forward directly into the Superset list query payload. When omitted, Superset applies its own defaults. The JSON output shape is unchanged regardless of whether these flags are supplied.
 
@@ -106,7 +119,7 @@ Owns API access helpers:
 
 `build_list_params` returns `{"q": json.dumps({...})}` with only the keys that were provided (non-None), or `{}` when no list-query args are set. The Superset API uses 0-based page indexing. For shared CLI search, the client emits a `filters` array with `{"col": ..., "opr": "ct", "value": ...}` and forwards explicit `order_column` / `order_direction` values.
 
-Current API methods:
+Current API read methods:
 - `get_current_user()` — returns the unwrapped user object (Superset wraps single-resource responses in `{"result": ...}`; these methods normalize that away)
 - `get_openapi_spec()` — returns the raw OpenAPI schema payload from `/api/v1/_openapi`
 - `list_dashboards(page, page_size, search, order_column, order_direction)` — returns the full list envelope `{"count": ..., "result": [...]}`. Optional list-query args are forwarded as `q` query params.
@@ -124,7 +137,25 @@ Current API methods:
 
 Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope before returning, so callers receive the resource dict directly. List methods (`list_*`) return the full envelope so callers can access both `count` and `result`.
 
+Current API write methods (require CLI `--allow-write` per ADR 0009/0010):
+- `create_chart(body)`, `update_chart(pk, body)`, `delete_chart(pk)`, `favorite_chart(pk)`, `unfavorite_chart(pk)`
+- `create_dashboard(body)`, `update_dashboard(id_or_slug, body)`, `delete_dashboard(id_or_slug)`, `favorite_dashboard(id_or_slug)`, `unfavorite_dashboard(id_or_slug)`, `copy_dashboard(id_or_slug, body)`
+- `create_dataset(body)`, `update_dataset(pk, body)`, `delete_dataset(pk)`, `refresh_dataset(pk)`
+- `create_database(body)`, `update_database(pk, body)`, `delete_database(pk)`, `test_database_connection(body)`
+- `create_saved_query(body)`, `update_saved_query(pk, body)`, `delete_saved_query(pk)`
+- `execute_sql(body)`, `format_sql(body)`, `estimate_sql(body)`, `stop_sql_query(body)`
+- `create_tag(body)`, `update_tag(pk, body)`, `delete_tag(pk)`
+- `create_theme(body)`, `update_theme(pk, body)`, `delete_theme(pk)`
+- `create_role(body)`, `update_role(pk, body)`, `delete_role(pk)`
+- `create_user(body)`, `update_user(pk, body)`, `delete_user(pk)`
+- `create_rls_rule(body)`, `update_rls_rule(pk, body)`, `delete_rls_rule(pk)`
+- `import_assets(resource, *, file_path, passwords=None, overwrite=False)` — multipart upload of a Superset asset bundle ZIP
+
+Writes route through `_post`, `_put`, `_delete`, which share the same response-handling path as `_get` via `_handle_response`. A successful response with no body returns `{}`.
+
 ## Command-to-code map
+
+All write commands are implemented in `src/superset_cli/cli.py` against methods on `src/superset_cli/client.py`. Their tests live in `tests/test_writes.py` (parametrized across every write command) and exercise both the missing-`--allow-write` refusal path and the success path.
 
 ### Global CLI
 
@@ -334,8 +365,18 @@ Single-resource getters (`get_*`) unwrap the Superset `{"result": ...}` envelope
 - `tests/test_phase2_special_reads.py` — embedded dashboard, permalink resolution, dataset related-objects, and datasource column-values
 - `tests/test_chart_data.py` — saved chart data fetch
 - `tests/test_auth_relogin.py` — combined logout-then-login flow
+- `tests/test_writes.py` — every write command: parametrized refusal without `--allow-write`, success path with `--allow-write`, `--json` output shape, body/file loading, and import-specific validation
 
 ## Typical change entry points
+
+### Add a new write command
+
+Start with:
+- `src/superset_cli/cli.py` — register the command on the right Typer sub-app and call `_require_allow_write(allow_write, action=...)` before `_run_write(...)`
+- `src/superset_cli/client.py` — add the matching `_post` / `_put` / `_delete` method
+- `tests/fakes.py` — add a matching no-op method that records into `self.calls` via `self._record(...)`
+- `tests/test_writes.py` — add a case to `WRITE_CASES`
+- update this file and `README.md` if the public surface changes
 
 ### Add a new read-only resource command
 
