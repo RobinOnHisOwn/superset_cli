@@ -128,6 +128,28 @@ def test_get_dashboard_unwraps_result(tmp_path: Path) -> None:
     assert result == inner
 
 
+def test_get_dashboard_charts_unwraps_result(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    inner = [{"id": 10, "slice_name": "Revenue by Month", "viz_type": "line"}]
+    resp = _make_response(200, content=json.dumps({"result": inner}).encode())
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        with patch.object(client.http, "get", return_value=resp):
+            result = client.get_dashboard_charts("7")
+    assert result == inner
+
+
+def test_get_dashboard_datasets_unwraps_result(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    inner = [{"id": 21, "table_name": "orders", "schema": "analytics"}]
+    resp = _make_response(200, content=json.dumps({"result": inner}).encode())
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        with patch.object(client.http, "get", return_value=resp):
+            result = client.get_dashboard_datasets("7")
+    assert result == inner
+
+
 def test_get_chart_unwraps_result(tmp_path: Path) -> None:
     state_path = tmp_path / "storage-state.json"
     _write_empty_state(state_path)
@@ -161,6 +183,28 @@ def test_get_database_unwraps_result(tmp_path: Path) -> None:
     assert result == inner
 
 
+def test_get_database_schemas_unwraps_result(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    inner = ["analytics", "public"]
+    resp = _make_response(200, content=json.dumps({"result": inner}).encode())
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        with patch.object(client.http, "get", return_value=resp):
+            result = client.get_database_schemas("31", catalog="main", force=True)
+    assert result == inner
+
+
+def test_get_database_tables_returns_full_payload(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    inner = {"count": 1, "result": [{"value": "orders", "type": "table", "extra": {}}]}
+    resp = _make_response(200, content=json.dumps(inner).encode())
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        with patch.object(client.http, "get", return_value=resp):
+            result = client.get_database_tables("31", schema_name="analytics", catalog_name="main", force=True)
+    assert result == inner
+
+
 def test_get_current_user_unwraps_result(tmp_path: Path) -> None:
     state_path = tmp_path / "storage-state.json"
     _write_empty_state(state_path)
@@ -169,6 +213,28 @@ def test_get_current_user_unwraps_result(tmp_path: Path) -> None:
     with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
         with patch.object(client.http, "get", return_value=resp):
             result = client.get_current_user()
+    assert result == inner
+
+
+def test_get_current_user_roles_unwraps_result(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    inner = {"roles": [{"id": 1, "name": "Admin"}, {"id": 2, "name": "Gamma"}]}
+    resp = _make_response(200, content=json.dumps({"result": inner}).encode())
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        with patch.object(client.http, "get", return_value=resp):
+            result = client.get_current_user_roles()
+    assert result == inner
+
+
+def test_get_openapi_spec_returns_raw_payload(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    inner = {"openapi": "3.0.0", "info": {"title": "Superset API", "version": "1.0.0"}}
+    resp = _make_response(200, content=json.dumps(inner).encode())
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        with patch.object(client.http, "get", return_value=resp):
+            result = client.get_openapi_spec()
     assert result == inner
 
 
@@ -193,6 +259,30 @@ def test_build_list_params_with_both() -> None:
     result = build_list_params(page=1, page_size=10)
     q = json.loads(result["q"])
     assert q == {"page": 1, "page_size": 10}
+
+
+def test_build_list_params_with_search_and_ordering() -> None:
+    result = build_list_params(
+        page=1,
+        page_size=10,
+        search="Revenue",
+        search_column="dashboard_title",
+        order_column="dashboard_title",
+        order_direction="asc",
+    )
+    q = json.loads(result["q"])
+    assert q == {
+        "page": 1,
+        "page_size": 10,
+        "filters": [{"col": "dashboard_title", "opr": "ct", "value": "Revenue"}],
+        "order_column": "dashboard_title",
+        "order_direction": "asc",
+    }
+
+
+def test_build_list_params_omits_empty_search() -> None:
+    result = build_list_params(page=0, search="", search_column="dashboard_title")
+    assert json.loads(result["q"]) == {"page": 0}
 
 
 def test_build_list_params_omits_none_values() -> None:
@@ -238,29 +328,69 @@ def test_get_without_params_passes_no_params(tmp_path: Path) -> None:
 # --- list_* page params ---
 
 
-def _list_params_test(tmp_path, method_name):
+def _list_params_test(tmp_path, method_name, expected_search_column):
     state_path = tmp_path / "storage-state.json"
     _write_empty_state(state_path)
     resp = _make_response(200, content=json.dumps({"count": 0, "result": []}).encode())
     fake_get, calls = _capture_get(resp)
     with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
         with patch.object(client.http, "get", side_effect=fake_get):
-            getattr(client, method_name)(page=0, page_size=5)
-    expected_q = json.dumps({"page": 0, "page_size": 5})
+            getattr(client, method_name)(
+                page=0,
+                page_size=5,
+                search="needle",
+                order_column="id",
+                order_direction="desc",
+            )
+    expected_q = json.dumps(
+        {
+            "page": 0,
+            "page_size": 5,
+            "filters": [{"col": expected_search_column, "opr": "ct", "value": "needle"}],
+            "order_column": "id",
+            "order_direction": "desc",
+        }
+    )
     assert calls[0][1].get("params") == {"q": expected_q}
 
 
 def test_list_dashboards_sends_page_params(tmp_path: Path) -> None:
-    _list_params_test(tmp_path, "list_dashboards")
+    _list_params_test(tmp_path, "list_dashboards", "dashboard_title")
 
 
 def test_list_charts_sends_page_params(tmp_path: Path) -> None:
-    _list_params_test(tmp_path, "list_charts")
+    _list_params_test(tmp_path, "list_charts", "slice_name")
 
 
 def test_list_datasets_sends_page_params(tmp_path: Path) -> None:
-    _list_params_test(tmp_path, "list_datasets")
+    _list_params_test(tmp_path, "list_datasets", "table_name")
 
 
 def test_list_databases_sends_page_params(tmp_path: Path) -> None:
-    _list_params_test(tmp_path, "list_databases")
+    _list_params_test(tmp_path, "list_databases", "database_name")
+
+
+def test_get_database_schemas_sends_query_params(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    resp = _make_response(200, content=json.dumps({"result": []}).encode())
+    fake_get, calls = _capture_get(resp)
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        with patch.object(client.http, "get", side_effect=fake_get):
+            client.get_database_schemas("31", catalog="main", force=True)
+    expected_q = json.dumps({"catalog": "main", "force": True})
+    assert calls[0][0] == "/api/v1/database/31/schemas/"
+    assert calls[0][1].get("params") == {"q": expected_q}
+
+
+def test_get_database_tables_sends_query_params(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    resp = _make_response(200, content=json.dumps({"count": 0, "result": []}).encode())
+    fake_get, calls = _capture_get(resp)
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        with patch.object(client.http, "get", side_effect=fake_get):
+            client.get_database_tables("31", schema_name="analytics", catalog_name="main", force=True)
+    expected_q = json.dumps({"schema_name": "analytics", "catalog_name": "main", "force": True})
+    assert calls[0][0] == "/api/v1/database/31/tables/"
+    assert calls[0][1].get("params") == {"q": expected_q}

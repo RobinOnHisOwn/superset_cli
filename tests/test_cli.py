@@ -15,15 +15,17 @@ def test_help_shows_read_only_focus() -> None:
     assert "read-only" in result.stdout.lower()
 
 
-def test_instances_list_defaults_to_human_output() -> None:
-    result = runner.invoke(app, ["instances", "list"])
+def test_instances_list_defaults_to_human_output(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    result = runner.invoke(app, ["--config", str(config_path), "instances", "list"])
 
     assert result.exit_code == 0
     assert "No instances configured." in result.stdout
 
 
-def test_instances_list_supports_json_output() -> None:
-    result = runner.invoke(app, ["instances", "list", "--json"])
+def test_instances_list_supports_json_output(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    result = runner.invoke(app, ["--config", str(config_path), "instances", "list", "--json"])
 
     assert result.exit_code == 0
     assert result.stdout.strip() == '{"instances":[]}'
