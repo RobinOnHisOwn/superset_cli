@@ -80,6 +80,21 @@ class SupersetClient:
 
     def _get(self, path: str, *, params: dict | None = None) -> dict:
         response = self.http.get(path, params=params)
+        return self._handle_response(response, path=path)
+
+    def _post(self, path: str, *, json_body: dict | None = None, files: dict | None = None, data: dict | None = None) -> dict:
+        response = self.http.post(path, json=json_body, files=files, data=data)
+        return self._handle_response(response, path=path)
+
+    def _put(self, path: str, *, json_body: dict | None = None) -> dict:
+        response = self.http.put(path, json=json_body)
+        return self._handle_response(response, path=path)
+
+    def _delete(self, path: str) -> dict:
+        response = self.http.delete(path)
+        return self._handle_response(response, path=path)
+
+    def _handle_response(self, response: httpx.Response, *, path: str) -> dict:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -90,6 +105,8 @@ class SupersetClient:
             if exc.response.status_code == 404:
                 raise NotFoundError(f"Resource not found: {path}") from exc
             raise
+        if not response.content:
+            return {}
         try:
             return response.json()
         except json.JSONDecodeError:
@@ -455,6 +472,144 @@ class SupersetClient:
 
     def get_openapi_spec(self) -> dict:
         return self._get("/api/v1/_openapi")
+
+    # ----- write methods (require CLI --allow-write per ADR 0009/0010) -----
+
+    def create_chart(self, body: dict) -> dict:
+        return self._post("/api/v1/chart/", json_body=body)
+
+    def update_chart(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/chart/{pk}", json_body=body)
+
+    def delete_chart(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/chart/{pk}")
+
+    def favorite_chart(self, pk: str) -> dict:
+        return self._post(f"/api/v1/chart/{pk}/favorites/")
+
+    def unfavorite_chart(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/chart/{pk}/favorites/")
+
+    def create_dashboard(self, body: dict) -> dict:
+        return self._post("/api/v1/dashboard/", json_body=body)
+
+    def update_dashboard(self, id_or_slug: str, body: dict) -> dict:
+        return self._put(f"/api/v1/dashboard/{id_or_slug}", json_body=body)
+
+    def delete_dashboard(self, id_or_slug: str) -> dict:
+        return self._delete(f"/api/v1/dashboard/{id_or_slug}")
+
+    def favorite_dashboard(self, id_or_slug: str) -> dict:
+        return self._post(f"/api/v1/dashboard/{id_or_slug}/favorites/")
+
+    def unfavorite_dashboard(self, id_or_slug: str) -> dict:
+        return self._delete(f"/api/v1/dashboard/{id_or_slug}/favorites/")
+
+    def copy_dashboard(self, id_or_slug: str, body: dict) -> dict:
+        return self._post(f"/api/v1/dashboard/{id_or_slug}/copy/", json_body=body)
+
+    def create_dataset(self, body: dict) -> dict:
+        return self._post("/api/v1/dataset/", json_body=body)
+
+    def update_dataset(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/dataset/{pk}", json_body=body)
+
+    def delete_dataset(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/dataset/{pk}")
+
+    def refresh_dataset(self, pk: str) -> dict:
+        return self._put(f"/api/v1/dataset/{pk}/refresh")
+
+    def create_database(self, body: dict) -> dict:
+        return self._post("/api/v1/database/", json_body=body)
+
+    def update_database(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/database/{pk}", json_body=body)
+
+    def delete_database(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/database/{pk}")
+
+    def test_database_connection(self, body: dict) -> dict:
+        return self._post("/api/v1/database/test_connection", json_body=body)
+
+    def create_saved_query(self, body: dict) -> dict:
+        return self._post("/api/v1/saved_query/", json_body=body)
+
+    def update_saved_query(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/saved_query/{pk}", json_body=body)
+
+    def delete_saved_query(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/saved_query/{pk}")
+
+    def execute_sql(self, body: dict) -> dict:
+        return self._post("/api/v1/sqllab/execute/", json_body=body)
+
+    def format_sql(self, body: dict) -> dict:
+        return self._post("/api/v1/sqllab/format_sql", json_body=body)
+
+    def estimate_sql(self, body: dict) -> dict:
+        return self._post("/api/v1/sqllab/estimate", json_body=body)
+
+    def stop_sql_query(self, body: dict) -> dict:
+        return self._post("/api/v1/query/stop", json_body=body)
+
+    def create_tag(self, body: dict) -> dict:
+        return self._post("/api/v1/tag/", json_body=body)
+
+    def update_tag(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/tag/{pk}", json_body=body)
+
+    def delete_tag(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/tag/{pk}")
+
+    def create_theme(self, body: dict) -> dict:
+        return self._post("/api/v1/theme/", json_body=body)
+
+    def update_theme(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/theme/{pk}", json_body=body)
+
+    def delete_theme(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/theme/{pk}")
+
+    def create_role(self, body: dict) -> dict:
+        return self._post("/api/v1/security/roles/", json_body=body)
+
+    def update_role(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/security/roles/{pk}", json_body=body)
+
+    def delete_role(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/security/roles/{pk}")
+
+    def create_user(self, body: dict) -> dict:
+        return self._post("/api/v1/security/users/", json_body=body)
+
+    def update_user(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/security/users/{pk}", json_body=body)
+
+    def delete_user(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/security/users/{pk}")
+
+    def create_rls_rule(self, body: dict) -> dict:
+        return self._post("/api/v1/rowlevelsecurity/", json_body=body)
+
+    def update_rls_rule(self, pk: str, body: dict) -> dict:
+        return self._put(f"/api/v1/rowlevelsecurity/{pk}", json_body=body)
+
+    def delete_rls_rule(self, pk: str) -> dict:
+        return self._delete(f"/api/v1/rowlevelsecurity/{pk}")
+
+    def import_assets(self, resource: str, *, file_path: Path, passwords: dict | None = None, overwrite: bool = False) -> dict:
+        if resource not in {"dashboard", "chart", "dataset", "database", "saved_query"}:
+            raise ValueError(f"Unsupported import resource: {resource}")
+        path = f"/api/v1/{resource}/import/"
+        data: dict = {}
+        if passwords is not None:
+            data["passwords"] = json.dumps(passwords)
+        if overwrite:
+            data["overwrite"] = "true"
+        with file_path.open("rb") as fh:
+            files = {"formData": (file_path.name, fh.read(), "application/zip")}
+        return self._post(path, files=files, data=data or None)
 
     def close(self) -> None:
         self.http.close()

@@ -6,6 +6,7 @@ class FakeSupersetClient:
         self.base_url = base_url
         self.storage_state_path = storage_state_path
         self.closed = False
+        self.calls: list[tuple] = []
 
     def get_current_user(self) -> dict:
         return {
@@ -229,6 +230,67 @@ class FakeSupersetClient:
 
     def get_datasource_column_values(self, datasource_type: str, datasource_id: str, column: str) -> dict:
         return {"result": ["a", "b", "c"]}
+
+    # ----- write methods (record calls only; do not mutate) -----
+
+    def _record(self, name: str, *args, **kwargs) -> dict:
+        self.calls.append((name, args, kwargs))
+        return {"id": 999, "name": name, "args": list(args), "kwargs": kwargs}
+
+    def create_chart(self, body: dict) -> dict: return self._record("create_chart", body=body)
+    def update_chart(self, pk: str, body: dict) -> dict: return self._record("update_chart", pk, body=body)
+    def delete_chart(self, pk: str) -> dict: return self._record("delete_chart", pk)
+    def favorite_chart(self, pk: str) -> dict: return self._record("favorite_chart", pk)
+    def unfavorite_chart(self, pk: str) -> dict: return self._record("unfavorite_chart", pk)
+
+    def create_dashboard(self, body: dict) -> dict: return self._record("create_dashboard", body=body)
+    def update_dashboard(self, id_or_slug: str, body: dict) -> dict: return self._record("update_dashboard", id_or_slug, body=body)
+    def delete_dashboard(self, id_or_slug: str) -> dict: return self._record("delete_dashboard", id_or_slug)
+    def favorite_dashboard(self, id_or_slug: str) -> dict: return self._record("favorite_dashboard", id_or_slug)
+    def unfavorite_dashboard(self, id_or_slug: str) -> dict: return self._record("unfavorite_dashboard", id_or_slug)
+    def copy_dashboard(self, id_or_slug: str, body: dict) -> dict: return self._record("copy_dashboard", id_or_slug, body=body)
+
+    def create_dataset(self, body: dict) -> dict: return self._record("create_dataset", body=body)
+    def update_dataset(self, pk: str, body: dict) -> dict: return self._record("update_dataset", pk, body=body)
+    def delete_dataset(self, pk: str) -> dict: return self._record("delete_dataset", pk)
+    def refresh_dataset(self, pk: str) -> dict: return self._record("refresh_dataset", pk)
+
+    def create_database(self, body: dict) -> dict: return self._record("create_database", body=body)
+    def update_database(self, pk: str, body: dict) -> dict: return self._record("update_database", pk, body=body)
+    def delete_database(self, pk: str) -> dict: return self._record("delete_database", pk)
+    def test_database_connection(self, body: dict) -> dict: return self._record("test_database_connection", body=body)
+
+    def create_saved_query(self, body: dict) -> dict: return self._record("create_saved_query", body=body)
+    def update_saved_query(self, pk: str, body: dict) -> dict: return self._record("update_saved_query", pk, body=body)
+    def delete_saved_query(self, pk: str) -> dict: return self._record("delete_saved_query", pk)
+
+    def execute_sql(self, body: dict) -> dict: return self._record("execute_sql", body=body)
+    def format_sql(self, body: dict) -> dict: return self._record("format_sql", body=body)
+    def estimate_sql(self, body: dict) -> dict: return self._record("estimate_sql", body=body)
+    def stop_sql_query(self, body: dict) -> dict: return self._record("stop_sql_query", body=body)
+
+    def create_tag(self, body: dict) -> dict: return self._record("create_tag", body=body)
+    def update_tag(self, pk: str, body: dict) -> dict: return self._record("update_tag", pk, body=body)
+    def delete_tag(self, pk: str) -> dict: return self._record("delete_tag", pk)
+
+    def create_theme(self, body: dict) -> dict: return self._record("create_theme", body=body)
+    def update_theme(self, pk: str, body: dict) -> dict: return self._record("update_theme", pk, body=body)
+    def delete_theme(self, pk: str) -> dict: return self._record("delete_theme", pk)
+
+    def create_role(self, body: dict) -> dict: return self._record("create_role", body=body)
+    def update_role(self, pk: str, body: dict) -> dict: return self._record("update_role", pk, body=body)
+    def delete_role(self, pk: str) -> dict: return self._record("delete_role", pk)
+
+    def create_user(self, body: dict) -> dict: return self._record("create_user", body=body)
+    def update_user(self, pk: str, body: dict) -> dict: return self._record("update_user", pk, body=body)
+    def delete_user(self, pk: str) -> dict: return self._record("delete_user", pk)
+
+    def create_rls_rule(self, body: dict) -> dict: return self._record("create_rls_rule", body=body)
+    def update_rls_rule(self, pk: str, body: dict) -> dict: return self._record("update_rls_rule", pk, body=body)
+    def delete_rls_rule(self, pk: str) -> dict: return self._record("delete_rls_rule", pk)
+
+    def import_assets(self, resource: str, *, file_path: Path, passwords: dict | None = None, overwrite: bool = False) -> dict:
+        return self._record("import_assets", resource, file_path=str(file_path), passwords=passwords, overwrite=overwrite)
 
     def close(self) -> None:
         self.closed = True

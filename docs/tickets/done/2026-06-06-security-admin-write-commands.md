@@ -1,6 +1,6 @@
 # Add security and admin write commands
 
-- Status: todo
+- Status: done
 - Priority: low
 - Type: code
 - Created by: agent
@@ -13,11 +13,15 @@ Superset exposes write-capable administration endpoints for areas such as roles,
 
 ## Definition of done
 
-- [ ] The approved security/admin write surface is defined.
-- [ ] CLI commands and client helpers implement the approved operations.
-- [ ] Tests cover success paths, failure handling, and safe user-facing behavior.
-- [ ] `README.md`, `docs/architecture/README.md`, and any required decision records are updated.
+- [x] The approved security/admin write surface is defined.
+- [x] CLI commands and client helpers implement the approved operations.
+- [x] Tests cover success paths, failure handling, and safe user-facing behavior.
+- [x] `README.md`, `docs/architecture/README.md`, and any required decision records are updated.
 
 ## Notes
 
 Blocked until write-capable scope is explicitly approved. This surface is especially sensitive and may need additional guardrails beyond other write features.
+
+## Resolution
+
+Closed 2026-06-06 by the write-command rollout: `docs/plans/2026-06-06-write-command-rollout.md`. Scope and safety contract are defined in `docs/decisions/0010-write-scope-expansion.md` (uniform `--allow-write` per invocation, no exceptions). Write commands and their tests live in `src/superset_cli/cli.py`, `src/superset_cli/client.py`, and `tests/test_writes.py`.

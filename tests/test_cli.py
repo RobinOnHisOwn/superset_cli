@@ -7,12 +7,12 @@ from superset_cli.cli import app
 runner = CliRunner()
 
 
-def test_help_shows_read_only_focus() -> None:
+def test_help_advertises_allow_write_safety() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
     assert "Superset CLI" in result.stdout
-    assert "read-only" in result.stdout.lower()
+    assert "--allow-write" in result.stdout
 
 
 def test_instances_list_defaults_to_human_output(tmp_path: Path) -> None:

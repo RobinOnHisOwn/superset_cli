@@ -1,8 +1,10 @@
 # 0001: Read-only bootstrap scope
 
-- Status: accepted
+- Status: superseded by [`0010-write-scope-expansion`](0010-write-scope-expansion.md) (2026-06-06)
 - Date: 2026-06-05
 - Related: `README.md`, `src/superset_cli/cli.py`, `tests/test_cli.py`, `docs/plans/2026-06-05-superset-cli-bootstrap.md`
+
+> Superseded. The product is no longer strictly read-only. See ADR 0010 for the current read+write scope and the `--allow-write` safety contract that gates every mutation.
 
 ## Context
 
