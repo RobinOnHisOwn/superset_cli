@@ -64,3 +64,5 @@ For a copyable starting point, use `../templates/decision-record-template.md`.
 - [0005: Architecture reference document](./0005-architecture-reference-document.md)
 - [0006: Markdown ticket system](./0006-markdown-ticket-system.md)
 - [0007: Superset CLI product and package name](./0007-superset-cli-product-and-package-name.md)
+- [0008: Cookie extraction from installed browsers](./0008-cookie-extraction-from-installed-browsers.md)
+- [0009: Write commands require `--allow-write` per invocation](./0009-write-command-explicit-opt-in.md)
