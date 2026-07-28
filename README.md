@@ -173,3 +173,31 @@ uv run superset-cli import upload prod chart     --file bundle.zip --overwrite -
 ```
 
 Both `--body '<json>'` and `--file <path-to-json>` accept the request payload. Pass `--body -` to read JSON from stdin. The two flags are mutually exclusive.
+
+## Local Superset for testing
+
+`devenv` includes a process that boots a sqlite-backed Apache Superset on `http://localhost:8088` for ad-hoc CLI testing. No Redis, no Celery, no Docker. First boot installs Superset into `.devenv/state/superset/venv/` and seeds an admin user (~1–2 min). Subsequent boots are seconds.
+
+```bash
+devenv up superset                # start it (or: bash scripts/dev-superset.sh)
+superset-open                     # open http://localhost:8088/login/ in your default browser
+# log in as user: admin   password: admin
+
+superset-cli instances add local http://localhost:8088
+superset-cli auth login local     # reads cookies from your installed browser
+superset-cli me show local --json
+superset-cli tags create local --body '{"name":"smoke"}' --allow-write --json
+```
+
+The dev instance disables CSRF and Talisman so cookie auth works without extra setup. It is not safe to expose. State lives under `.devenv/state/superset/`; delete that directory to reset.
+
+### Snowflake connections from `~/.snowflake/connections.toml`
+
+On every Superset start, `scripts/dev-superset-import-snowflake.sh` reconciles the local instance's database list against `~/.snowflake/connections.toml`. Connections missing in Superset are created as `snowflake-<name>`; existing ones are skipped. Auth methods supported:
+
+- **password** — baked into the SQLAlchemy URI.
+- **key-pair** (`private_key_path` / `private_key_file`) — mapped to `authenticator=snowflake_jwt`, key path stored in the database's `extra`.
+- **PROGRAMMATIC_ACCESS_TOKEN** — the file at `token_file_path` is read and submitted as the password. No `authenticator` parameter is sent (the connector rejects `PROGRAMMATIC_ACCESS_TOKEN` as an authenticator value even though the Snowflake CLI uses that label in TOML).
+- **externalbrowser / oauth** — skipped (no browser on the server).
+
+If a TOML entry has no `database` field, the importer defaults to `SNOWFLAKE_SAMPLE_DATA` so Superset's connection-test query has a current database. Failures in the importer never bring down the Superset server. Secrets written into Superset's sqlite metadata DB are protected only by a static dev `SECRET_KEY` — do not point this at a production credential.
