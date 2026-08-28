@@ -105,6 +105,30 @@ def _api_errors() -> Generator[None, None, None]:
         raise typer.Exit(code=1)
 
 
+_DIFF_SKIP_FIELDS = {
+    "id", "uuid", "slug", "url", "thumbnail_url", "changed_on", "changed_on_utc",
+    "changed_on_delta_humanized", "created_on_delta_humanized", "changed_by",
+    "changed_by_name", "created_by",
+}
+
+
+def diff_dashboard_records(a: dict, b: dict) -> list[tuple[str, str, str]]:
+    """Compare two dashboard records, skipping identity/timestamp fields.
+
+    Returns (field, a_value, b_value) for each differing field. Large values
+    (position_json, json_metadata) are truncated so the output stays readable.
+    """
+    diffs: list[tuple[str, str, str]] = []
+    for key in sorted(set(a) | set(b)):
+        if key in _DIFF_SKIP_FIELDS:
+            continue
+        if a.get(key) != b.get(key):
+            va = json.dumps(a.get(key), ensure_ascii=False)[:400]
+            vb = json.dumps(b.get(key), ensure_ascii=False)[:400]
+            diffs.append((key, va, vb))
+    return diffs
+
+
 def _require_storage_state(*, instance_name: str, state_dir: Path) -> Path:
     storage_state_path = get_storage_state_path(state_dir=state_dir, instance_name=instance_name)
     if not storage_state_path.exists():
@@ -179,7 +203,7 @@ def _validate_browser(value: str) -> str:
 
 _BROWSER_HELP = (
     "Browser to read cookies from. Default 'auto' tries chrome, edge, brave, firefox, zen, safari "
-    "in order and picks the first with a session cookie for the target host. "
+    "in order and picks the first session accepted by Superset. "
     "You must already be signed in to Superset in that browser."
 )
 
@@ -200,14 +224,32 @@ def auth_login(
 ) -> None:
     instance = _require_instance(ctx, instance_name)
     storage_state_path = get_storage_state_path(state_dir=state_dir, instance_name=instance_name)
+
+    def validate_imported_state(path: Path) -> bool:
+        client = SupersetClient(base_url=instance.base_url, storage_state_path=path)
+        try:
+            client.get_current_user()
+            return True
+        except AuthExpiredError:
+            return False
+        finally:
+            client.close()
+
     try:
         summary = import_browser_cookies(
             base_url=instance.base_url,
             storage_state_path=storage_state_path,
             browser=browser,
+            validate=validate_imported_state,
         )
     except NoCookiesFoundError as exc:
         typer.echo(str(exc))
+        raise typer.Exit(code=1)
+    except httpx.RequestError as exc:
+        typer.echo(
+            f"The imported cookie could not be validated because of a network error: {exc}. "
+            "The auth state was preserved."
+        )
         raise typer.Exit(code=1)
 
     payload = {
@@ -454,6 +496,40 @@ def dashboards_get(
     typer.echo(f"Title: {payload.get('dashboard_title')}")
     typer.echo(f"Slug: {payload.get('slug')}")
     typer.echo(f"Published: {payload.get('published')}")
+
+
+@dashboards_app.command("diff")
+def dashboards_diff(
+    ctx: typer.Context,
+    instance_name: str,
+    id_or_slug_a: str,
+    id_or_slug_b: str,
+    state_dir: Annotated[
+        Path,
+        typer.Option("--state-dir", help="Directory for saved auth state."),
+    ] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, typer.Option("--json", help="Return structured JSON output.")] = False,
+) -> None:
+    """Compare two dashboard records field-by-field (identity/timestamp fields ignored)."""
+    instance = _require_instance(ctx, instance_name)
+    storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+    with _api_errors():
+        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+            a = client.get_dashboard(id_or_slug_a)
+            b = client.get_dashboard(id_or_slug_b)
+    diffs = diff_dashboard_records(a, b)
+
+    if as_json:
+        typer.echo(json.dumps([{"field": f, "a": va, "b": vb} for f, va, vb in diffs], separators=(",", ":")))
+        return
+
+    if not diffs:
+        typer.echo("No differences.")
+        return
+    for field, va, vb in diffs:
+        typer.echo(f"[{field}]")
+        typer.echo(f"  {id_or_slug_a}: {va}")
+        typer.echo(f"  {id_or_slug_b}: {vb}")
 
 
 @dashboards_app.command("charts")
@@ -1395,11 +1471,27 @@ def charts_update(
     ctx: typer.Context, instance_name: str, pk: str,
     body: Annotated[str | None, _BODY_OPT] = None,
     file: Annotated[Path | None, _FILE_OPT] = None,
+    clear_query_context: Annotated[
+        bool,
+        typer.Option(
+            "--clear-query-context",
+            help=(
+                "Also set query_context to null. Superset keeps a stale saved "
+                "query_context when only params change, which can pin old "
+                "filters/metrics; use this when editing a chart's params."
+            ),
+        ),
+    ] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
 ) -> None:
-    payload_body = _load_body(body, file)
+    if clear_query_context and body is None and file is None:
+        payload_body: dict = {}
+    else:
+        payload_body = _load_body(body, file)
+    if clear_query_context:
+        payload_body = {**payload_body, "query_context": None}
     _require_allow_write(allow_write, action=f"update chart {pk} on instance '{instance_name}'")
     _run_write(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
