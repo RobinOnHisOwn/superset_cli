@@ -23,9 +23,9 @@ Typical command flow:
 1. The CLI entrypoint starts in `src/superset_cli/main.py`.
 2. Typer command registration and command implementations live in `src/superset_cli/cli.py`.
 3. Commands load configured instances through `src/superset_cli/config.py`.
-4. Auth-related commands derive storage-state paths through `src/superset_cli/auth.py` and import cookies from an installed browser via `browser-cookie3`.
-5. API-backed commands load saved browser state through `src/superset_cli/client.py`.
-6. `SupersetClient` sends read-only REST requests and returns JSON payloads.
+4. Auth-related commands derive storage-state paths through `src/superset_cli/auth.py`, import cookies from an installed browser via `browser-cookie3`, and validate the imported session through `SupersetClient.get_current_user()`.
+5. API-backed commands load validated saved browser state through `src/superset_cli/client.py`.
+6. `SupersetClient` sends REST requests, fetching and caching Superset's CSRF token before writes, and returns JSON payloads.
 7. `cli.py` formats those payloads for human-readable output or emits compact `--json` output.
 
 ## Source tree map
@@ -101,11 +101,12 @@ It also normalizes and validates `base_url` values.
 ### `auth.py`
 
 Owns auth-state helpers:
-- derive storage-state path per instance
-- derive storage-state path per instance
+- derive storage-state paths per instance
 - inspect saved auth state
 - remove saved auth state for one instance
-- launch a Playwright browser for interactive login and save the resulting storage state
+- import target-host cookies from installed browsers through `browser-cookie3`
+
+`cli.py` completes login by validating each imported candidate against Superset. Auto mode continues past rejected browsers; explicit rejection or candidate exhaustion removes imported state. Network failures stop fallback and preserve state of unknown validity.
 
 ### `client.py`
 
@@ -151,7 +152,7 @@ Current API write methods (require CLI `--allow-write` per ADR 0009/0010):
 - `create_rls_rule(body)`, `update_rls_rule(pk, body)`, `delete_rls_rule(pk)`
 - `import_assets(resource, *, file_path, passwords=None, overwrite=False)` — multipart upload of a Superset asset bundle ZIP
 
-Writes route through `_post`, `_put`, `_delete`, which share the same response-handling path as `_get` via `_handle_response`. A successful response with no body returns `{}`.
+Writes route through `_post`, `_put`, `_delete`, which fetch `/api/v1/security/csrf_token/` once per client and send its result as `X-CSRFToken`. They share the same response-handling path as `_get` via `_handle_response`. A successful response with no body returns `{}`.
 
 ## Command-to-code map
 
@@ -182,7 +183,7 @@ All write commands are implemented in `src/superset_cli/cli.py` against methods 
 - `auth login <instance> [--browser ...]`
   - code: `src/superset_cli/cli.py`, `src/superset_cli/auth.py`, `src/superset_cli/config.py`
   - tests: `tests/test_auth.py`
-  - notes: reads cookies for the instance host from an installed browser via `browser-cookie3` and writes them to `storage-state.json`. `--browser` choices: `auto` (default), `chrome`, `edge`, `brave`, `firefox`, `zen`, `safari`. `auto` tries each browser in priority order and picks the first with cookies for the target host. See [ADR 0008](../decisions/0008-cookie-extraction-from-installed-browsers.md) for the rationale.
+  - notes: reads cookies for the instance host from installed browsers via `browser-cookie3`, writes each candidate to `storage-state.json`, and validates it through `/api/v1/me/` before reporting success. `--browser` choices: `auto` (default), `chrome`, `edge`, `brave`, `firefox`, `zen`, `safari`. `auto` tries each browser in priority order and picks the first candidate accepted by Superset; explicit browser selection remains fail-fast. See [ADR 0008](../decisions/0008-cookie-extraction-from-installed-browsers.md) for the rationale.
 
 - `auth logout <instance>`
   - code: `src/superset_cli/cli.py`, `src/superset_cli/auth.py`
