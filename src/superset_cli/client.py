@@ -77,21 +77,27 @@ class SupersetClient:
             follow_redirects=True,
             timeout=30.0,
         )
+        self._csrf_token: str | None = None
 
     def _get(self, path: str, *, params: dict | None = None) -> dict:
         response = self.http.get(path, params=params)
         return self._handle_response(response, path=path)
 
+    def _write_headers(self) -> dict[str, str]:
+        if self._csrf_token is None:
+            self._csrf_token = self._get("/api/v1/security/csrf_token/")["result"]
+        return {"X-CSRFToken": self._csrf_token, "Referer": f"{self.base_url}/"}
+
     def _post(self, path: str, *, json_body: dict | None = None, files: dict | None = None, data: dict | None = None) -> dict:
-        response = self.http.post(path, json=json_body, files=files, data=data)
+        response = self.http.post(path, json=json_body, files=files, data=data, headers=self._write_headers())
         return self._handle_response(response, path=path)
 
     def _put(self, path: str, *, json_body: dict | None = None) -> dict:
-        response = self.http.put(path, json=json_body)
+        response = self.http.put(path, json=json_body, headers=self._write_headers())
         return self._handle_response(response, path=path)
 
     def _delete(self, path: str) -> dict:
-        response = self.http.delete(path)
+        response = self.http.delete(path, headers=self._write_headers())
         return self._handle_response(response, path=path)
 
     def _handle_response(self, response: httpx.Response, *, path: str) -> dict:
