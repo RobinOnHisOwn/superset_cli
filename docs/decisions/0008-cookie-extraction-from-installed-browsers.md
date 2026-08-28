@@ -26,9 +26,11 @@ Supported browsers in v1:
 - Safari on macOS (BinaryCookies parser shipped by `browser-cookie3`)
 - Zen — Firefox-format under a custom profile path; we resolve the path explicitly and reuse `browser-cookie3`'s Firefox loader
 
-Default browser is `auto`: try `chrome → edge → brave → firefox → zen → safari` in order, pick the first that yields at least one cookie matching the instance host.
+Default browser is `auto`: try `chrome → edge → brave → firefox → zen → safari` in order, validate matching cookies against Superset, and pick the first accepted session. Explicit browser selection remains fail-fast.
 
 The `storage-state.json` schema is unchanged, so every read command keeps working without modification.
+
+Treat cookie extraction as tentative until Superset accepts the imported session. `auth login` validates each saved candidate through the current-user endpoint before reporting success. Auto mode skips rejected browser candidates; explicit rejection or exhaustion removes the imported state and exits non-zero. If validation cannot run because of a network failure, the CLI stops fallback, exits non-zero, and preserves the current state because its validity is unknown.
 
 ## Consequences
 
@@ -43,7 +45,7 @@ Negative / honest caveats:
 
 - The user must already be signed in to Superset in the chosen browser. If not, the CLI errors with a clear message asking them to sign in there first. This is a regression in "log me in from scratch" UX but a much bigger improvement in "reuse my existing session" UX, which is the actual common case.
 - Chrome-family cookie decryption triggers a one-time macOS Keychain prompt for the `Chrome Safe Storage` entry. After "Always Allow" it's silent.
-- Session-only cookies that the browser hasn't persisted to disk are not captured. Chrome doesn't persist session cookies between launches; Firefox/Zen do via `sessionstore`. In practice Superset's session cookie is typically persisted long enough for this to be a non-issue.
+- Session-only cookies that the browser hasn't persisted to disk are not captured. Chrome doesn't persist session cookies between launches; Firefox/Zen do via `sessionstore`. A stale on-disk cookie can still be extracted while a fresh browser-only session exists; live validation now rejects that false-success case explicitly.
 - `browser-cookie3` occasionally breaks when a browser updates its encryption scheme (notably Chrome on Windows v130+ moved to per-process binding). We accept the upstream-fix cadence as the cost of not maintaining our own decryptor.
 - LGPL transitive license: dynamic import (the only mode we use) is permitted and does not affect this repository's effective license.
 

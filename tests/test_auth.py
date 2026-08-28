@@ -2,11 +2,28 @@ import json
 from http.cookiejar import Cookie, CookieJar
 from pathlib import Path
 
+import httpx
+import pytest
 from typer.testing import CliRunner
 
+from fakes import FakeSupersetClient
 from superset_cli.cli import app
+from superset_cli.client import AuthExpiredError
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def valid_superset_client(monkeypatch):
+    clients = []
+
+    class ValidClient(FakeSupersetClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            clients.append(self)
+
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", ValidClient)
+    return clients
 
 
 def _add_prod_instance(config_path: Path) -> None:
@@ -362,6 +379,118 @@ def test_auth_login_auto_no_cookies_includes_all_loader_errors(monkeypatch, tmp_
     assert "No Superset session found" in result.stdout
     assert "chrome: keychain denied" in result.stdout
     assert "edge: edge not installed" in result.stdout
+
+
+def test_auth_login_auto_skips_rejected_cookie_and_uses_next_browser(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    state_dir = tmp_path / "state"
+    _add_prod_instance(config_path)
+    monkeypatch.setattr(
+        "superset_cli.auth.browser_cookie3.chrome",
+        lambda **kwargs: _jar(_make_cookie("session", "stale", "superset.example.com")),
+    )
+    monkeypatch.setattr("superset_cli.auth.browser_cookie3.edge", lambda **kwargs: _jar())
+    monkeypatch.setattr(
+        "superset_cli.auth.browser_cookie3.brave",
+        lambda **kwargs: _jar(_make_cookie("session", "valid", "superset.example.com")),
+    )
+    clients = []
+
+    class CandidateClient(FakeSupersetClient):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            clients.append(self)
+
+        def get_current_user(self) -> dict:
+            cookies = json.loads(self.storage_state_path.read_text())["cookies"]
+            if next(cookie["value"] for cookie in cookies if cookie["name"] == "session") == "stale":
+                raise AuthExpiredError("Session expired")
+            return super().get_current_user()
+
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", CandidateClient)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config_path), "auth", "login", "prod", "--state-dir", str(state_dir), "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["browser_used"] == "brave"
+    assert len(clients) == 2
+    assert all(client.closed for client in clients)
+    cookies = json.loads((state_dir / "prod" / "storage-state.json").read_text())["cookies"]
+    assert next(cookie["value"] for cookie in cookies if cookie["name"] == "session") == "valid"
+
+
+def test_auth_login_validates_imported_session_and_closes_client(
+    monkeypatch, tmp_path: Path, valid_superset_client
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    state_dir = tmp_path / "state"
+    _add_prod_instance(config_path)
+    monkeypatch.setattr(
+        "superset_cli.auth.browser_cookie3.chrome",
+        lambda **kwargs: _jar(_make_cookie("session", "valid", "superset.example.com")),
+    )
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config_path), "auth", "login", "prod", "--state-dir", str(state_dir), "--browser", "chrome"],
+    )
+
+    assert result.exit_code == 0
+    assert len(valid_superset_client) == 1
+    assert valid_superset_client[0].closed is True
+
+
+def test_auth_login_rejected_session_removes_imported_state(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    state_dir = tmp_path / "state"
+    _add_prod_instance(config_path)
+    monkeypatch.setattr(
+        "superset_cli.auth.browser_cookie3.chrome",
+        lambda **kwargs: _jar(_make_cookie("session", "stale", "superset.example.com")),
+    )
+
+    class RejectedClient(FakeSupersetClient):
+        def get_current_user(self) -> dict:
+            raise AuthExpiredError("Session expired")
+
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", RejectedClient)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config_path), "auth", "login", "prod", "--state-dir", str(state_dir), "--browser", "chrome"],
+    )
+
+    assert result.exit_code == 1
+    assert "found in chrome, but Superset rejected it" in result.stdout
+    assert not (state_dir / "prod").exists()
+
+
+def test_auth_login_network_failure_preserves_imported_state(monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    state_dir = tmp_path / "state"
+    _add_prod_instance(config_path)
+    monkeypatch.setattr(
+        "superset_cli.auth.browser_cookie3.chrome",
+        lambda **kwargs: _jar(_make_cookie("session", "unknown", "superset.example.com")),
+    )
+
+    class NetworkClient(FakeSupersetClient):
+        def get_current_user(self) -> dict:
+            raise httpx.ConnectError("Connection refused")
+
+    monkeypatch.setattr("superset_cli.cli.SupersetClient", NetworkClient)
+
+    result = runner.invoke(
+        app,
+        ["--config", str(config_path), "auth", "login", "prod", "--state-dir", str(state_dir), "--browser", "chrome"],
+    )
+
+    assert result.exit_code == 1
+    assert "could not be validated" in result.stdout
+    assert (state_dir / "prod" / "storage-state.json").exists()
 
 
 def test_auth_login_human_output(monkeypatch, tmp_path: Path) -> None:

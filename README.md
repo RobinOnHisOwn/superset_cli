@@ -8,7 +8,7 @@ Current scope (read by default, write opt-in):
 - Python project managed with `uv`
 - `devenv` shell configured for Python + uv
 - local instance config management (add, list, remove)
-- browser-cookie import login + saved auth-state inspection and API validation
+- browser-cookie import login with immediate live validation + saved auth-state inspection
 - read access to dashboards, charts, datasets, databases, annotation layers, CSS templates, themes, tags, reports, saved queries, queries, logs, permalinks, OpenAPI, embedded configs, related objects, chart data
 - write access to chart, dashboard, dataset, database, saved-query, SQL Lab, tag, theme, security (roles, users, RLS), and asset-import surfaces; **every write command requires `--allow-write` on every invocation** (see [ADR 0009](docs/decisions/0009-write-command-explicit-opt-in.md) and [ADR 0010](docs/decisions/0010-write-scope-expansion.md))
 - shared list-query controls on all list commands via `--page` (0-based), `--page-size`, `--search`, `--order-column`, and `--order-direction`
@@ -46,6 +46,10 @@ Without `direnv`, enter the shell manually:
 devenv shell
 ```
 
+## Authentication
+
+`auth login` imports matching cookies from an installed browser and immediately validates them against Superset. In `auto` mode, rejected sessions are skipped until a live browser session is found. Explicit-browser rejection or exhaustion of all candidates exits non-zero and removes the imported state; network failures preserve the current state because its validity is unknown.
+
 ## Current commands
 
 ```bash
@@ -65,6 +69,7 @@ uv run superset-cli dashboards list prod --json
 uv run superset-cli dashboards list prod --page 0 --page-size 25 --json
 uv run superset-cli dashboards list prod --search Revenue --order-column dashboard_title --order-direction asc --json
 uv run superset-cli dashboards get prod 7 --json
+uv run superset-cli dashboards diff prod 7 8 --json           # field-by-field record comparison
 uv run superset-cli dashboards charts prod 7 --json
 uv run superset-cli dashboards datasets prod 7 --json
 uv run superset-cli charts list prod --json
@@ -113,6 +118,7 @@ Every command in the table below requires `--allow-write` on every invocation. W
 # Charts
 uv run superset-cli charts create     prod --body '{"slice_name":"Revenue","viz_type":"line"}' --allow-write
 uv run superset-cli charts update     prod 42 --body '{"slice_name":"Revenue v2"}' --allow-write
+uv run superset-cli charts update     prod 42 --clear-query-context --allow-write   # drop stale saved query_context after a params edit
 uv run superset-cli charts delete     prod 42 --allow-write
 uv run superset-cli charts favorite   prod 42 --allow-write
 uv run superset-cli charts unfavorite prod 42 --allow-write
