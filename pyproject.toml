@@ -3,6 +3,8 @@ name = "superset-cli"
 version = "0.1.0"
 description = "CLI for self-hosted Apache Superset"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
   "browser-cookie3>=0.20.1",
@@ -16,6 +18,10 @@ dependencies = [
 dev = [
   "pytest>=8.4.1",
 ]
+
+[project.urls]
+Source = "https://github.com/RobinOnHisOwn/superset_cli"
+Issues = "https://github.com/RobinOnHisOwn/superset_cli/issues"
 
 [project.scripts]
 superset-cli = "superset_cli.main:main"
