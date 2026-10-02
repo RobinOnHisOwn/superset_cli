@@ -1446,6 +1446,69 @@ def _run_write(
     typer.echo(human_line)
 
 
+@app.command("api")
+def api_request(
+    ctx: typer.Context,
+    instance_name: str,
+    path: str,
+    method: Annotated[str, typer.Option("--method", "-X", help="GET, POST, PUT, PATCH, or DELETE.")] = "GET",
+    param: Annotated[list[str] | None, typer.Option("--param", help="Query KEY=VALUE; repeat as needed.")] = None,
+    body: Annotated[str | None, typer.Option("--body", help="JSON object, or - for stdin.")] = None,
+    file: Annotated[Path | None, typer.Option("--file", help="JSON body file.")] = None,
+    allow_write: Annotated[bool, typer.Option("--allow-write", help="Required to actually perform the write. Without it the command is a dry-run.")] = False,
+    state_dir: Annotated[Path, typer.Option("--state-dir")] = DEFAULT_STATE_DIR,
+    browser: Annotated[str, typer.Option("--browser", callback=_validate_browser, help=_BROWSER_HELP)] = DEFAULT_BROWSER,
+    as_json: Annotated[bool, typer.Option("--json", help="Compact full JSON response.")] = False,
+) -> None:
+    """Call a custom API endpoint; automatically import browser cookies once if needed."""
+    method = method.upper()
+    try:
+        SupersetClient.validate_api_path(path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        raise typer.BadParameter("Unsupported --method; use GET, POST, PUT, PATCH, or DELETE.")
+    params = []
+    for item in param or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise typer.BadParameter("--param requires KEY=VALUE.")
+        params.append((key, value))
+    if method != "GET":
+        _require_allow_write(allow_write, action=f"send {method} {path} on instance '{instance_name}'")
+    if method == "GET" and (body is not None or file is not None):
+        raise typer.BadParameter("GET does not accept --body or --file.")
+    try:
+        payload_body = _load_body(body, file) if body is not None or file is not None else None
+    except OSError as exc:
+        raise typer.BadParameter(f"Cannot read --file: {exc}") from exc
+    if (body is not None or file is not None) and not isinstance(payload_body, dict):
+        raise typer.BadParameter("The request body must be a JSON object.")
+    instance = _require_instance(ctx, instance_name)
+    storage_path = get_storage_state_path(state_dir=state_dir, instance_name=instance_name)
+
+    def validate(candidate: Path) -> bool:
+        with SupersetClient(base_url=instance.base_url, storage_state_path=candidate) as client:
+            try:
+                client.request("GET", "/api/v1/me/")
+                return True
+            except AuthExpiredError:
+                return False
+
+    with _api_errors():
+        if not storage_path.exists() or not validate(storage_path):
+            typer.echo(f"Importing browser cookies for '{instance_name}'...", err=True)
+            try:
+                import_browser_cookies(base_url=instance.base_url, storage_state_path=storage_path,
+                                      browser=browser, validate=validate)
+            except NoCookiesFoundError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(code=1) from exc
+        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_path) as client:
+            payload = client.request(method, path, params=params, json_body=payload_body)
+    typer.echo(json.dumps(payload, separators=(",", ":") if as_json else None, indent=None if as_json else 2))
+
+
 # ----- charts -----
 
 @charts_app.command("create")
