@@ -57,6 +57,8 @@ For a copyable starting point, use `../templates/decision-record-template.md`.
 
 ## Current decision records
 
+- [0011: Build and publish releases through PyPI Trusted Publishing](./0011-pypi-release-publishing.md)
+
 - [0001: Read-only bootstrap scope](./0001-read-only-bootstrap-scope.md)
 - [0002: Local config and auth state storage](./0002-local-config-and-auth-state-storage.md)
 - [0003: Browser login with Playwright and saved storage state](./0003-browser-login-with-playwright-and-saved-storage-state.md)
