@@ -46,9 +46,22 @@ Without `direnv`, enter the shell manually:
 devenv shell
 ```
 
-## Authentication
+## Custom authenticated API calls
 
-`auth login` imports matching cookies from an installed browser and immediately validates them against Superset. In `auto` mode, rejected sessions are skipped until a live browser session is found. Explicit-browser rejection or exhaustion of all candidates exits non-zero and removes the imported state; network failures preserve the current state because its validity is unknown.
+```bash
+uv run superset-cli api prod /api/v1/_openapi --json
+uv run superset-cli api prod /api/v1/dashboard/ --param 'q={"page":0,"page_size":10}' --json
+uv run superset-cli api prod /api/v1/chart/42 --method PUT --file /tmp/chart.json --allow-write --json
+```
+
+Replace the instance and IDs with discovered values; the write example is not permission to execute it.
+GET is the default. POST, PUT, PATCH, and DELETE require `--allow-write`, including read-like POST calls.
+Use repeated `--param KEY=VALUE` options and JSON object bodies through `--body`, `--body -` (stdin), or `--file`.
+Responses preserve the full API envelope: `--json` emits compact JSON, otherwise pretty JSON.
+
+The command validates the saved session before sending the request. Missing or rejected authentication triggers one browser-cookie import attempt with live validation; select a browser with `--browser zen` if needed.
+You must already be signed in in that browser. Recovery progress goes to stderr; no browser is launched and sent mutations are never retried. Network errors and permission failures do not trigger recovery.
+Only instance-relative `/api/v1/` paths are accepted and redirects are not followed. Custom requests handle CSRF automatically. Existing commands retain their explicit login behavior.
 
 ## Current commands
 

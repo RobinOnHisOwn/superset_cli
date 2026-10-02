@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from pydantic import BaseModel, Field
@@ -78,6 +79,30 @@ class SupersetClient:
             timeout=30.0,
         )
         self._csrf_token: str | None = None
+
+    @staticmethod
+    def validate_api_path(path: str) -> None:
+        decoded = path
+        while unquote(decoded) != decoded:
+            decoded = unquote(decoded)
+        parts = urlsplit(decoded)
+        if (not decoded.startswith("/api/v1/") or parts.scheme or parts.netloc
+                or parts.fragment or "#" in decoded or "\\" in decoded
+                or any(ord(c) < 32 or ord(c) == 127 for c in decoded)
+                or any(p in {".", ".."} for p in parts.path.split("/"))):
+            raise ValueError("PATH must be an instance-relative /api/v1/ path without traversal or fragments.")
+
+    def request(self, method: str, path: str, *, params=None, json_body=None):
+        self.validate_api_path(path)
+        headers = {}
+        if method != "GET":
+            token = self.request("GET", "/api/v1/security/csrf_token/")["result"]
+            headers = {"X-CSRFToken": token}
+        response = self.http.request(method, path, params=params, json=json_body,
+                                     headers=headers, follow_redirects=False)
+        if response.is_redirect:
+            raise AuthExpiredError("Superset redirected the API request. Sign in to the configured instance.")
+        return self._handle_response(response, path=path)
 
     def _get(self, path: str, *, params: dict | None = None) -> dict:
         response = self.http.get(path, params=params)

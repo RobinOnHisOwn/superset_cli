@@ -16,6 +16,11 @@ This document explains how the current code is organized. For repository rationa
 
 Keep this document current when command-to-code mappings, major module responsibilities, or common structural entry points change.
 
+## Custom API entry point
+
+`api INSTANCE PATH` maps to `api_request()` in `src/superset_cli/cli.py` and `SupersetClient.request()` / `validate_api_path()` in `src/superset_cli/client.py`; tests live in `tests/test_api.py`.
+The CLI parses query/body options, invokes the shared write guard, validates saved auth, and performs at most one validated browser-cookie import before sending the custom request. The client confines paths to `/api/v1/`, disables redirects, and obtains CSRF for non-GET requests. Existing command flows are unchanged. See [ADR 0011](../decisions/0011-custom-api-authentication.md).
+
 ## High-level flow
 
 Typical command flow:
