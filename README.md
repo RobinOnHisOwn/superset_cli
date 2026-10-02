@@ -2,6 +2,8 @@
 
 CLI for self-hosted Apache Superset.
 
+[MIT licensed](LICENSE). Copyright (c) 2026 Robin Rittsteiger.
+
 ## Scope
 
 Current scope (read by default, write opt-in):
@@ -29,7 +31,55 @@ A glossary of repository-specific terms lives in `docs/glossary.md`.
 
 A structural overview of modules, command-to-code mappings, and test entry points lives in `docs/architecture/README.md`.
 
-## Quick start
+## Installation for users
+
+After the first PyPI release, install the CLI without cloning this repository:
+
+```bash
+uv tool install superset-cli
+superset-cli --help
+```
+
+Upgrade with `uv tool upgrade superset-cli`. Python 3.12 or newer is required;
+uv can provision Python when needed. `pipx install superset-cli` is an alternative.
+The release workflow exists, but a published package is not yet confirmed.
+
+## Publishing releases (maintainers)
+
+The canonical upstream is [RobinOnHisOwn/superset_cli](https://github.com/RobinOnHisOwn/superset_cli),
+owned by the `RobinOnHisOwn` organization. The company repository is a mirror, not
+an independent publishing source.
+
+Before the first release:
+
+1. Confirm ownership and permission to publish from the canonical repository,
+   and review source and Git history for sensitive material. MIT licensing is configured
+   in `LICENSE` and the distribution metadata.
+2. Keep this repository excluded from shared self-hosted runner groups. CI and publishing
+   use GitHub-hosted `ubuntu-latest` runners.
+3. Create a GitHub environment named `pypi` with required reviewer approval and
+   restrict deployment to tags matching `v*` (no branches). A sole maintainer can
+   select themselves as reviewer with prevent-self-review disabled. On Free/Pro/Team,
+   required reviewers are available only for public repositories; configure this gate
+   after making the reviewed repository public, before publishing. Protect release
+   tags and `main` against unauthorized changes.
+4. Configure a pending [PyPI Trusted Publisher](https://pypi.org/manage/account/publishing/)
+   with project `superset-cli`, owner `RobinOnHisOwn`, repository `superset_cli`, workflow filename
+   `publish.yml`, and environment `pypi`. Do not create an API-token secret.
+   Configure only the canonical repository, not mirrors.
+
+For each release, update `project.version` in `pyproject.toml` and regenerate `uv.lock`
+with `uv lock`; have the change reviewed and CI pass. Run **Build and publish** manually
+for a build-only rehearsal. Publish a GitHub release from the reviewed commit with a
+matching tag (for example `v0.1.0` for version `0.1.0`), then approve the `pypi`
+environment deployment. Manual runs never publish; published releases build and test
+before publishing the same artifacts. PyPI versions cannot be overwritten: use a new
+version for changed distributions. Prereleases also publish, so use a corresponding
+version such as `0.2.0rc1` and tag `v0.2.0rc1`.
+
+See [ADR 0011](docs/decisions/0011-pypi-release-publishing.md) for the security rationale.
+
+## Quick start for contributors
 
 If you use `direnv`, allow the repo once and `devenv` will auto-activate whenever you enter this directory.
 
