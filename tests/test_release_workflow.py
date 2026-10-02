@@ -29,6 +29,16 @@ def test_package_declares_mit_license_and_copyright_holder():
     assert 'THE SOFTWARE IS PROVIDED "AS IS"' in license_text
 
 
+@pytest.mark.parametrize("action,pin", [
+    ("actions/upload-artifact", "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"),
+    ("actions/download-artifact", "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"),
+])
+def test_release_artifact_actions_use_audited_node24_releases(action, pin):
+    uses = {step.get("uses") for job in release_workflow()["jobs"].values()
+            for step in job["steps"]}
+    assert f"{action}@{pin}" in uses
+
+
 def release_workflow():
     return yaml.safe_load((REPO_ROOT / ".github/workflows/publish.yml").read_text())
 
