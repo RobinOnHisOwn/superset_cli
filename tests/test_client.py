@@ -289,6 +289,58 @@ def test_build_list_params_omits_none_values() -> None:
     assert build_list_params(page=None, page_size=None) == {}
 
 
+# --- CSRF for writes ---
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs"),
+    [
+        ("_post", "/api/v1/dataset/", {"json_body": {"table_name": "orders"}}),
+        ("_put", "/api/v1/dataset/7", {"json_body": {"table_name": "orders"}}),
+        ("_delete", "/api/v1/dataset/7", {}),
+    ],
+)
+def test_write_requests_send_superset_csrf_token(tmp_path: Path, method: str, path: str, kwargs: dict) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/v1/security/csrf_token/":
+            return httpx.Response(200, json={"result": "csrf-value"})
+        return httpx.Response(200, json={"result": {"id": 7}})
+
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        client.http.close()
+        client.http = httpx.Client(base_url=client.base_url, transport=httpx.MockTransport(handler))
+        getattr(client, method)(path, **kwargs)
+
+    assert [request.url.path for request in requests] == ["/api/v1/security/csrf_token/", path]
+    assert requests[-1].headers["X-CSRFToken"] == "csrf-value"
+    assert requests[-1].headers["Referer"] == "https://example.com/"
+
+
+def test_csrf_token_is_cached_for_client_lifetime(tmp_path: Path) -> None:
+    state_path = tmp_path / "storage-state.json"
+    _write_empty_state(state_path)
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path == "/api/v1/security/csrf_token/":
+            return httpx.Response(200, json={"result": "csrf-value"})
+        return httpx.Response(200, json={})
+
+    with SupersetClient(base_url="https://example.com", storage_state_path=state_path) as client:
+        client.http.close()
+        client.http = httpx.Client(base_url=client.base_url, transport=httpx.MockTransport(handler))
+        client._post("/api/v1/chart/", json_body={})
+        client._delete("/api/v1/chart/7")
+
+    assert paths.count("/api/v1/security/csrf_token/") == 1
+
+
 # --- _get params forwarding ---
 
 

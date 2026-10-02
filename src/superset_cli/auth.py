@@ -177,6 +177,7 @@ def import_browser_cookies(
     base_url: str,
     storage_state_path: Path,
     browser: str = DEFAULT_BROWSER,
+    validate: Callable[[Path], bool] | None = None,
 ) -> dict:
     if browser not in SUPPORTED_BROWSERS:
         raise ValueError(
@@ -185,8 +186,13 @@ def import_browser_cookies(
 
     host = _hostname_of(base_url)
 
+    def accepted(cookies: list[Cookie]) -> bool:
+        _write_storage_state(storage_state_path, cookies)
+        return validate is None or validate(storage_state_path)
+
     if browser == "auto":
         errors: dict[str, Exception] = {}
+        rejected: list[str] = []
         picked: tuple[str, list[Cookie]] | None = None
         for name in _AUTO_ORDER:
             try:
@@ -194,10 +200,18 @@ def import_browser_cookies(
             except Exception as exc:
                 errors[name] = exc
                 continue
-            if cookies:
+            if cookies and accepted(cookies):
                 picked = (name, cookies)
                 break
+            if cookies:
+                rejected.append(name)
         if picked is None:
+            if rejected:
+                shutil.rmtree(storage_state_path.parent, ignore_errors=True)
+                raise NoCookiesFoundError(
+                    f"Superset rejected cookies from: {', '.join(rejected)}. "
+                    f"Sign in to {base_url} in another browser, then re-run."
+                )
             raise NoCookiesFoundError(
                 f"No Superset session found for {host} in any supported browser. "
                 f"Sign in to {base_url} in your browser first, then re-run."
@@ -218,8 +232,12 @@ def import_browser_cookies(
                 f"No Superset session found for {host} in {browser}. "
                 f"Sign in to {base_url} in {browser} first, then re-run."
             )
+        if not accepted(cookies):
+            shutil.rmtree(storage_state_path.parent, ignore_errors=True)
+            raise NoCookiesFoundError(
+                f"A cookie was found in {browser}, but Superset rejected it. "
+                "The imported auth state was removed."
+            )
         browser_used = browser
-
-    _write_storage_state(storage_state_path, cookies)
 
     return {"browser_used": browser_used, "cookie_count": len(cookies)}
