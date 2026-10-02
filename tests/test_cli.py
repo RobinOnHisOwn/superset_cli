@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+from rich.text import Text
 from typer.testing import CliRunner
 
 from superset_cli.cli import app
@@ -7,12 +9,21 @@ from superset_cli.cli import app
 runner = CliRunner()
 
 
-def test_help_advertises_allow_write_safety() -> None:
+@pytest.mark.parametrize("force_color", [False, True])
+def test_help_advertises_allow_write_safety(
+    monkeypatch: pytest.MonkeyPatch, force_color: bool
+) -> None:
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FORCE_COLOR" if force_color else "NO_COLOR", "1")
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    assert "Superset CLI" in result.stdout
-    assert "--allow-write" in result.stdout
+    if force_color:
+        assert "\x1b[" in result.stdout
+    help_text = Text.from_ansi(result.stdout).plain
+    assert "Superset CLI" in help_text
+    assert "--allow-write" in help_text
 
 
 def test_instances_list_defaults_to_human_output(tmp_path: Path) -> None:
