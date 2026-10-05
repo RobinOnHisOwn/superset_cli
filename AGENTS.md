@@ -157,6 +157,15 @@ Live verification is allowed, but guarded.
 - Never commit credentials, auth state, browser profiles, or secrets.
 - Use `/tmp` for temporary files and scratch artifacts.
 
+## Public repository content
+
+This repository and its source distribution are public. Everything committed, including docs, plans, tickets, tests, fixtures, commit messages, and PR descriptions, must be free of employer- or customer-specific details.
+
+- Use the example company `Example Corp` and reserved example domains (`example.com`, `superset.example.com`, `superset-staging.example.com`) instead of real company names, hostnames, or SSO setups.
+- Do not quote real instance data: dashboard, chart, dataset, or database names, IDs, user names, or emails taken from a live Superset. Replace them with neutral examples before committing.
+- Redact cookie values, tokens, and other credentials in captured command output (for example `session=<redacted>`).
+- When live verification against a real instance informs a doc or ticket, describe the behavior, not the instance.
+
 ## Ask-first boundaries
 
 Ask before:
