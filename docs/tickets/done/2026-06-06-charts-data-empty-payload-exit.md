@@ -1,6 +1,6 @@
 # charts data exit code on empty or errored payloads
 
-- Status: todo
+- Status: done
 - Priority: medium
 - Type: code
 - Created by: agent
@@ -25,6 +25,10 @@ This makes scripted use unreliable: the CLI silently produces "success" output a
 - [ ] JSON output is still emitted to stdout on the failure paths so callers can inspect the raw payload; only the exit code and a short stderr line change.
 - [ ] Tests cover: success path unchanged, all-error path, all-empty path, mixed (one query succeeds, one is empty), and the single-row scalar path stays exit 0.
 - [ ] `README.md` notes the new exit-code contract for `charts data`.
+
+## Completion evidence
+
+Implemented failure exits after emitting output, including intact JSON on failure. Tests cover all-error, all-empty, mixed results, zero/NULL scalar rows, and human/JSON modes. Full suite: 579 passed; CLI help and build passed. See ADR 0012. NULL measures are not inferred as empty.
 
 ## Notes
 

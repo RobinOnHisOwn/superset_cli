@@ -52,9 +52,21 @@ The current product-scope constraint that the CLI should not perform write-capab
 
 The canonical templates in `docs/templates/` for plans, decision records, and final reports.
 
+## Default instance
+
+The optional `default_instance` persisted in local config by `instances use`. Explicit positional/global selections and `SUPERSET_CLI_INSTANCE` take precedence; a sole configured instance is the final fallback.
+
+## JWT state
+
+The separate private `jwt-state.json` containing access/refresh tokens for an explicitly selected JWT instance. It is not browser cookie state; decoded expiry claims are display-only, not signature validation.
+
+## Playwright auth export
+
+A newly created private, normalized cookie-state file from `auth export-playwright`, using an explicitly verified expiry convention. It does not replace CLI state or renew authentication.
+
 ## Storage state
 
-The Playwright browser session data saved to `storage-state.json`, primarily used here to persist cookies for later API access.
+The CLI browser-cookie bundle saved to `storage-state.json` for later API access. Its raw expiry convention is not guaranteed to be Playwright-compatible; use the explicit export for browser-context checks. JWT state remains separate.
 
 ## Ticket lifecycle
 

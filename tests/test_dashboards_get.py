@@ -127,7 +127,8 @@ def test_dashboards_get_http_status_error_prints_message(monkeypatch, instance_s
     )
 
     assert result.exit_code == 1
-    assert "Superset API error: HTTP 403" in result.stdout
+    assert "Superset API error: GET /api/v1/dashboard/7 HTTP 403" in result.stderr
+    assert result.stdout == ""
 
 
 def test_dashboards_get_closes_client(monkeypatch, instance_setup) -> None:

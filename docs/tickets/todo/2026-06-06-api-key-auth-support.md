@@ -21,3 +21,5 @@ If the repository later targets a Superset version that actually supports Bearer
 ## Notes
 
 Blocked until version support is confirmed and the API-key auth research ticket is resolved.
+
+Prerequisite review (2026-10-06): no target deployment/release capability and API-key credential contract have been verified for this continuation. JWT availability does not prove API-key support. Keep this ticket gated rather than add an auth mode that guesses server support or falls back silently. No live API-key probe or API-key implementation was performed.

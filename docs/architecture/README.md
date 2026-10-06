@@ -16,6 +16,12 @@ This document explains how the current code is organized. For repository rationa
 
 Keep this document current when command-to-code mappings, major module responsibilities, or common structural entry points change.
 
+## Owner command entry points
+
+Both `charts` and `dashboards` register the same focused callbacks in `cli.py`: `resource_owners` (`owners`), `owner_candidates` (`owner-candidates`), and `resource_owners_change` (`owners-set/add/remove`). `_run_owner_call` owns output and non-zero verification reporting. The shared `_require_allow_write` runs before client creation, even for no-ops.
+
+`SupersetClient.get_owners` reuses the existing detail getter and validates numeric resource/owner identities. `get_owner_candidates` verifies related-query capabilities and preserves the server envelope. `change_owners` validates IDs/clear intent, checks the target OpenAPI via `_require_owner_contract` and bounded `_resolve_schema`, resolves slug/UUID to numeric PK, sends only owners with existing update transport, and reads effective owners back. It never retries a mutation; mismatches, failed verification, and unknown network outcomes remain distinct. Tests: `tests/test_owners.py`. Limits and rationale: [ADR 0020](../decisions/0020-guarded-resource-owners.md).
+
 ## Custom API entry point
 
 `api INSTANCE PATH` maps to `api_request()` in `src/superset_cli/cli.py` and `SupersetClient.request()` / `validate_api_path()` in `src/superset_cli/client.py`; tests live in `tests/test_api.py`.
@@ -27,11 +33,20 @@ Typical command flow:
 
 1. The CLI entrypoint starts in `src/superset_cli/main.py`.
 2. Typer command registration and command implementations live in `src/superset_cli/cli.py`.
-3. Commands load configured instances through `src/superset_cli/config.py`.
-4. Auth-related commands derive storage-state paths through `src/superset_cli/auth.py`, import cookies from an installed browser via `browser-cookie3`, and validate the imported session through `SupersetClient.get_current_user()`.
-5. API-backed commands load validated saved browser state through `src/superset_cli/client.py`.
+3. `src/superset_cli/instance_selection.py` resolves omitted instances before native argument parsing; handlers load configuration through `src/superset_cli/config.py`.
+4. Cookie login uses `src/superset_cli/auth.py` and `browser-cookie3`, validating candidate state through the current-user API. JWT login/refresh uses `src/superset_cli/jwt_auth.py` with environment-only credentials and separate private token state.
+5. API-backed handlers select browser or JWT state per instance, then construct `src/superset_cli/client.py`'s authenticated client.
 6. `SupersetClient` sends REST requests, fetching and caching Superset's CSRF token before writes, and returns JSON payloads.
 7. `cli.py` formats those payloads for human-readable output or emits compact `--json` output.
+
+## Instance/auth entry points
+
+- `instances use NAME`, `--show`, `--clear`: `cli.py`, `config.py`, `instance_selection.py`; `tests/test_default_instance.py`.
+- Global `--instance` and omitted positional instances: `InstanceCommand.parse_args` and `resolve_instance_name` in `instance_selection.py`.
+- `auth jwt login/refresh/logout` and JWT status: `cli.py`, `jwt_auth.py`, `models.py`, `client.py`; `tests/test_jwt_auth.py`.
+- `auth export-playwright`: `cli.py`, `auth.py`; `tests/test_playwright_export.py`.
+- Optional render verification: `scripts/verify_dashboard.py`; `tests/test_dashboard_recipe.py` (optional installed-browser fixture).
+- Running package `--version`: `cli.py` and package metadata; `tests/test_version.py`.
 
 ## Source tree map
 
@@ -39,8 +54,11 @@ Typical command flow:
 - `src/superset_cli/cli.py` — Typer app, command handlers, output formatting, guard checks
 - `src/superset_cli/config.py` — config paths, load/save helpers, instance lookup/upsert
 - `src/superset_cli/models.py` — Pydantic models for config data and URL validation
-- `src/superset_cli/auth.py` — auth-state paths, auth inspection, browser login flow
-- `src/superset_cli/client.py` — storage-state parsing, cookie header building, read-only Superset API client
+- `src/superset_cli/auth.py` — browser-state paths/inspection, installed-browser cookie import, explicit private Playwright export
+- `src/superset_cli/jwt_auth.py` — DB/LDAP login/refresh, private separate token state, display-only expiry metadata
+- `src/superset_cli/instance_selection.py` — default precedence and Typer command arity adapter
+- `src/superset_cli/client.py` — cookie/JWT auth selection, bounded GET-only JWT refresh, CSRF-protected API access
+- `scripts/verify_dashboard.py` — optional Playwright rendered-content/tab/screenshot verification (not part of core dependencies)
 - `tests/` — pytest coverage grouped by command area and helper module
 - `docs/plans/` — plans and temporary implementation reasoning
 - `docs/decisions/` — durable decision records
@@ -77,7 +95,8 @@ Current command groups:
 - `saved-queries` (read + write)
 - `queries`, `logs`
 - `sqllab` (write-only group: execute, format-sql, estimate, stop-query)
-- `security` (write-only group: roles, users, RLS via `security rls`)
+- `security` (role/user/RLS reads and explicit opt-in writes)
+- `explore` (saved-chart state and cached form-data reads)
 - `import` (write-only group: server-side multipart asset bundles)
 
 Write-command policy is enforced by the shared `_require_allow_write(...)` helper in `cli.py`. It is called by every write command before the API call. Without `--allow-write`, the command exits 1 with a message naming the would-be mutation and the missing flag, and no HTTP request is sent. Request bodies for write commands are loaded by the shared `_load_body(body, file)` helper, which accepts `--body '<json>'`, `--body -` (stdin), or `--file <path-to-json>`.
@@ -300,6 +319,16 @@ All write commands are implemented in `src/superset_cli/cli.py` against methods 
   - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
   - tests: `tests/test_phase2_special_reads.py`
 
+### Security and Explore reads
+
+`security roles list/get`, `security users list/get`, and `security rls list/get`
+use the existing `_run_list`/`_run_get` helpers in `cli.py` and corresponding
+`SupersetClient.list_roles/get_role`, `list_users/get_user`, and
+`list_rls_rules/get_rls_rule` methods. FAB role/user endpoints are plural.
+`explore show --slice-id` and `explore form-data` use `get_explore` and
+`get_explore_form_data`; the latter unwraps `form_data`, not `result`.
+Tests: `tests/test_security_explore_reads.py`.
+
 ### Charts commands
 
 - `charts list <instance>`
@@ -313,6 +342,18 @@ All write commands are implemented in `src/superset_cli/cli.py` against methods 
 - `charts data <instance> <pk>`
   - code: `src/superset_cli/cli.py`, `src/superset_cli/client.py`
   - tests: `tests/test_chart_data.py`
+
+`charts data` now supports CSV and copied query-context overrides. Override
+execution uses `SupersetClient.get_chart_data(time_range=..., filters=...)` and
+the existing CSRF-enabled `_post`; ordinary saved-chart reads still use GET.
+Tests: `tests/test_chart_data.py`, `tests/test_chart_data_overrides.py`.
+
+### Binary asset exports
+
+`dashboards/charts/datasets/databases export` share `assets_export` in `cli.py`.
+`SupersetClient.export_assets` validates resource/IDs and uses `_get_binary` for
+ZIP bytes; JSON reads keep their existing helper. Tests: `tests/test_exports.py`.
+See [ADR 0014](../decisions/0014-binary-asset-exports.md).
 
 ### Datasets commands
 
