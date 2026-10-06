@@ -2,6 +2,7 @@ import json
 
 import httpx
 import pytest
+from rich.text import Text
 from typer.testing import CliRunner
 
 from superset_cli.cli import app
@@ -61,8 +62,14 @@ def test_security_explore_reads(monkeypatch, instance_setup, args, path, is_list
         assert "not found" in result.output.lower()
 
 
-def test_explore_show_requires_slice_id(instance_setup):
+@pytest.mark.parametrize("force_color", [False, True])
+def test_explore_show_requires_slice_id(instance_setup, monkeypatch, force_color):
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FORCE_COLOR" if force_color else "NO_COLOR", "1")
     config, state = instance_setup
     result = CliRunner().invoke(app, ["--config", str(config), "explore", "show", "prod", "--state-dir", str(state)])
     assert result.exit_code == 2
-    assert "--slice-id" in result.output
+    if force_color:
+        assert "\x1b[" in result.output
+    assert "--slice-id" in Text.from_ansi(result.output).plain

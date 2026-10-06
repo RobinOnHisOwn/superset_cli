@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from rich.text import Text
 from typer.testing import CliRunner
 from superset_cli.cli import app
 from superset_cli.client import SupersetClient
@@ -379,11 +380,18 @@ def test_default_instance_selection_for_owner_command(api):
     assert json.loads(result.stdout)["id"] == 7
 
 
+@pytest.mark.parametrize("force_color", [False, True])
 @pytest.mark.parametrize("command", ["owners-set", "owners-add", "owners-remove"])
-def test_owner_mutation_help_and_clear_guard(api, command):
+def test_owner_mutation_help_and_clear_guard(api, command, monkeypatch, force_color):
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FORCE_COLOR" if force_color else "NO_COLOR", "1")
     help_result = runner.invoke(app, [api.resource + "s", command, "--help"])
     assert help_result.exit_code == 0
-    assert "--allow-write" in help_result.output and "dry-run" in help_result.output
+    if force_color:
+        assert "\x1b[" in help_result.output
+    help_text = Text.from_ansi(help_result.output).plain
+    assert "--allow-write" in help_text and "dry-run" in help_text
     result = invoke(api, command, "--clear")
     assert result.exit_code == 1
     assert "--allow-write" in result.output
