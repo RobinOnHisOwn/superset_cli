@@ -12,7 +12,11 @@ Zen Browser is **not** natively supported but stores cookies in Firefox format. 
 
 ## Cookie matching
 
+<<<<<<< HEAD
 Use the raw hostname from `instance.base_url` (e.g. `superset-raw.studitemps.de`). After loading the cookie jar, filter to cookies whose `domain` matches the target host per the standard browser cookie-sending rule:
+=======
+Use the raw hostname from `instance.base_url` (e.g. `superset-raw.example.com`). After loading the cookie jar, filter to cookies whose `domain` matches the target host per the standard browser cookie-sending rule:
+>>>>>>> docs/agent-efficiency-tickets
 
 ```
 matches(cookie_domain, host) :=
@@ -20,7 +24,11 @@ matches(cookie_domain, host) :=
   host.endswith("." + cookie_domain.lstrip("."))
 ```
 
+<<<<<<< HEAD
 This captures both host-only cookies on `superset-raw.studitemps.de` and parent-domain cookies on `.studitemps.de` (which is where Studitemps' SSO actually sets the session). It avoids pulling in unrelated cookies from sibling subdomains.
+=======
+This captures both host-only cookies on `superset-raw.example.com` and parent-domain cookies on `.example.com` (which is where Example Corp's SSO actually sets the session). It avoids pulling in unrelated cookies from sibling subdomains.
+>>>>>>> docs/agent-efficiency-tickets
 
 ## CLI shape
 

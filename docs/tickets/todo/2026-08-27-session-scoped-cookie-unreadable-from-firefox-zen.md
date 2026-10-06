@@ -19,7 +19,11 @@ logged in.
 Proven on staging (no auth required):
 
 ```
+<<<<<<< HEAD
 $ curl -sS -D - -o /dev/null https://superset-staging.jobvalley.tech/login/google \
+=======
+$ curl -sS -D - -o /dev/null https://superset-staging.example.com/login/google \
+>>>>>>> docs/agent-efficiency-tickets
     | grep -i set-cookie
 set-cookie: session=<redacted>; Secure; HttpOnly; Path=/; SameSite=Lax
 ```
@@ -35,17 +39,27 @@ a common, correct Superset configuration.
 
 ## Definition of done
 
+<<<<<<< HEAD
 - [ ] `auth login` detects the "matching cookie exists in browser but is
       session-scoped / not persisted" situation and explains it specifically,
       including the concrete fixes (use Chrome; or make the Superset session
       cookie permanent), rather than a generic "rejected" message.
+=======
+- [ ] Distinguish verified observations (no persisted cookie found, persisted cookie rejected, network failure, permission failure) from the possible explanation that a valid session exists only in browser memory; do not claim memory-only state can be detected from an empty SQLite result alone.
+- [ ] Explain browser-specific recovery: one validated import attempt followed by a supported browser fallback or a clear blocked outcome, not repeated identical logout/login or quit/reopen instructions.
+- [ ] Document when the existing `api` command performs its single automatic recovery attempt; do not broaden retries to sent mutations or treat every HTTP 403 as expired auth.
+>>>>>>> docs/agent-efficiency-tickets
 - [ ] Evaluate and pick at least one first-class remedy, e.g.:
       - a manual cookie/paste or `--cookie`/`--session` input path for when
         browser extraction cannot see the cookie;
       - reading Firefox/Zen `sessionstore` (session cookies) in addition to
         `cookies.sqlite`, if feasible and safe;
       - documenting Chrome as the supported browser for session-scoped setups.
+<<<<<<< HEAD
 - [ ] Tests cover the session-scoped detection/messaging and any new input path.
+=======
+- [ ] Tests cover missing and rejected persisted cookies, bounded recovery, network/permission failures, and any new input path without false claims of successful authentication.
+>>>>>>> docs/agent-efficiency-tickets
 - [ ] `README.md` and ADR 0008 document the limitation and the chosen remedy.
 
 ## Notes
@@ -53,3 +67,8 @@ a common, correct Superset configuration.
 Out of scope (explicitly rejected this session): WebDriver BiDi / remote-debugging
 attach to a running browser — too specialized for the default workflow. Keep
 `cookies.sqlite` extraction as the default; add a fallback rather than replacing it.
+<<<<<<< HEAD
+=======
+
+The 2026-10-06 workflow audit identified repeated ineffective authentication instructions. Existing live validation and automatic browser fallback are already implemented; first verify the installed CLI has those capabilities. Changing server cookie persistence or introducing secret-input paths requires separate explicit approval. Coordinate the companion-skill recovery instructions with `docs/tickets/todo/2026-10-06-refresh-companion-skill-recipes.md` and installation preflight with `docs/tickets/todo/2026-10-06-release-capability-preflight.md`.
+>>>>>>> docs/agent-efficiency-tickets

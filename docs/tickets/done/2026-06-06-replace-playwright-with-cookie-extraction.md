@@ -9,7 +9,11 @@
 
 ## Context
 
+<<<<<<< HEAD
 Playwright-driven login is hostile to users: ~250 MB Chromium download per dev environment, an isolated empty profile that forces sign-in every run, and brittle behavior on OAuth/SSO instances like `superset.studitemps.de`. The user explicitly rejected this approach: "one way that is userfriendly and works for everybody."
+=======
+Playwright-driven login is hostile to users: ~250 MB Chromium download per dev environment, an isolated empty profile that forces sign-in every run, and brittle behavior on OAuth/SSO instances like `superset.example.com`. The user explicitly rejected this approach: "one way that is userfriendly and works for everybody."
+>>>>>>> docs/agent-efficiency-tickets
 
 Cookie extraction from the user's already-installed browser reuses the session they already have, with zero browser launch and zero extra downloads.
 
