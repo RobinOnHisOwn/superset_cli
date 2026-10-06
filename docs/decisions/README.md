@@ -57,6 +57,18 @@ For a copyable starting point, use `../templates/decision-record-template.md`.
 
 ## Current decision records
 
+- [0010: Write-scope expansion](./0010-write-scope-expansion.md)
+- [0011: Custom API authentication](./0011-custom-api-authentication.md)
+- [0012: Chart-data output contract](./0012-chart-data-output-contract.md)
+- [0013: Narrow security read scope](./0013-security-read-scope.md)
+- [0014: Binary asset exports](./0014-binary-asset-exports.md)
+- [0015: Saved chart query overrides](./0015-chart-query-overrides.md)
+- [0016: API failure diagnostics](./0016-api-failure-diagnostics.md)
+- [0017: Explicit Playwright auth export](./0017-explicit-playwright-auth-export.md)
+- [0018: Per-instance JWT authentication](./0018-per-instance-jwt-auth.md)
+- [0019: Default instance selection](./0019-default-instance-selection.md)
+- [0020: Guarded chart and dashboard owners](./0020-guarded-resource-owners.md)
+
 - [0011: Build and publish releases through PyPI Trusted Publishing](./0011-pypi-release-publishing.md)
 
 - [0001: Read-only bootstrap scope](./0001-read-only-bootstrap-scope.md)

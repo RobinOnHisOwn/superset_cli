@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import shutil
 import sys
@@ -24,6 +25,11 @@ SUPPORTED_BROWSERS: tuple[str, ...] = (
     "safari",
 )
 DEFAULT_BROWSER = "auto"
+_PERSISTED_COOKIE_HINT = (
+    " No matching persisted cookie was exposed. A Firefox/Zen session existing only in memory "
+    "is possible, but this CLI cannot detect it. Use an accessible session in a supported "
+    "browser such as Chrome, validate it once, or report authentication blocked."
+)
 _AUTO_ORDER: tuple[str, ...] = ("chrome", "edge", "brave", "firefox", "zen", "safari")
 
 
@@ -139,7 +145,45 @@ def _serialise_cookie(c: Cookie) -> dict:
         "domain": c.domain,
         "path": c.path or "/",
         "expires": float(c.expires) if c.expires is not None else None,
+        "secure": bool(c.secure),
+        "httpOnly": c.has_nonstandard_attr("HTTPOnly") or c.has_nonstandard_attr("HttpOnly"),
+        "sameSite": c.get_nonstandard_attr("SameSite", "Lax"),
     }
+
+
+def export_playwright_state(source: Path, output: Path, *, expiry_unit: str = "seconds") -> Path:
+    if expiry_unit not in {"seconds", "milliseconds"}:
+        raise ValueError("Expiry unit must be seconds or milliseconds.")
+    payload = json.loads(source.read_text())
+    if not isinstance(payload, dict) or not isinstance(payload.get("cookies"), list) or not isinstance(payload.get("origins", []), list):
+        raise ValueError("Invalid saved browser state.")
+    cookies = []
+    for cookie in payload["cookies"]:
+        if not isinstance(cookie, dict) or any(not isinstance(cookie.get(key), str) for key in ("name", "value", "domain", "path")):
+            raise ValueError("Invalid cookie fields in saved state.")
+        expiry = cookie.get("expires")
+        if isinstance(expiry, bool) or (expiry is not None and not isinstance(expiry, (int, float))):
+            raise ValueError("Invalid cookie expiry in saved state.")
+        if expiry is None or expiry in {0, -1}:
+            expiry = -1
+        else:
+            expiry = expiry / (1000 if expiry_unit == "milliseconds" else 1)
+            if not math.isfinite(expiry) or not 0 < expiry <= 253402300799:
+                raise ValueError("Invalid cookie expiry; select the correct --expiry-unit.")
+        item = {key: cookie[key] for key in ("name", "value", "domain", "path")}
+        for key in ("secure", "httpOnly"):
+            if key in cookie and not isinstance(cookie[key], bool):
+                raise ValueError("Invalid cookie attributes in saved state.")
+            item[key] = cookie.get(key, False)
+        item["sameSite"] = cookie.get("sameSite", "Lax")
+        if item["sameSite"] not in {"Strict", "Lax", "None"}:
+            raise ValueError("Invalid sameSite cookie attribute.")
+        item["expires"] = expiry
+        cookies.append(item)
+    encoded = json.dumps({"cookies": cookies, "origins": payload.get("origins", [])}, allow_nan=False)
+    with os.fdopen(os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as destination:
+        destination.write(encoded)
+    return output
 
 
 def _filter_cookies(jar: CookieJar, host: str) -> list[Cookie]:
@@ -216,6 +260,7 @@ def import_browser_cookies(
                 f"No Superset session found for {host} in any supported browser. "
                 f"Sign in to {base_url} in your browser first, then re-run."
                 f"{_format_loader_errors(errors)}"
+                f"{_PERSISTED_COOKIE_HINT if len(errors) < len(_AUTO_ORDER) else ''}"
             )
         browser_used, cookies = picked
     else:
@@ -231,6 +276,7 @@ def import_browser_cookies(
             raise NoCookiesFoundError(
                 f"No Superset session found for {host} in {browser}. "
                 f"Sign in to {base_url} in {browser} first, then re-run."
+                f"{_PERSISTED_COOKIE_HINT if browser in {'firefox', 'zen'} else ''}"
             )
         if not accepted(cookies):
             shutil.rmtree(storage_state_path.parent, ignore_errors=True)

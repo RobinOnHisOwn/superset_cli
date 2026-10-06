@@ -1,6 +1,6 @@
 # Add Explore read commands
 
-- Status: todo
+- Status: done
 - Priority: medium
 - Type: code
 - Created by: agent
@@ -17,6 +17,10 @@ Per the Explore read-surface design, expose two narrow read commands for explore
 - [ ] CLI commands `explore show <instance> --slice-id <id>` and `explore form-data <instance> <key>` exist with JSON and human output.
 - [ ] Tests cover JSON, human output, missing parameters, and not-found.
 - [ ] `README.md` and `docs/architecture/README.md` are updated.
+
+## Completion evidence
+
+Added saved-chart `explore show --slice-id` and cached `explore form-data` reads. Verified upstream schemas: Explore state unwraps `result`; cached form-data unwraps `form_data`. `tests/test_security_explore_reads.py` covers JSON/human/empty/not-found and required slice ID. Full suite: 579 passed; CLI help and build passed. README and architecture updated. No live instance queried.
 
 ## Notes
 

@@ -1,6 +1,6 @@
 # Add row-level-security read commands
 
-- Status: todo
+- Status: done
 - Priority: medium
 - Type: code
 - Created by: agent
@@ -17,6 +17,10 @@ Per the security read-surface design, expose read-only row-level-security rules.
 - [ ] CLI commands `security rls list` and `security rls get` exist with JSON and human output.
 - [ ] Tests cover JSON, human output, empty list, and not-found.
 - [ ] `README.md` and `docs/architecture/README.md` are updated.
+
+## Completion evidence
+
+Added RLS list/get reads through existing CLI helpers. `tests/test_security_explore_reads.py` covers JSON/human/empty/not-found using synthetic transport responses. Full suite: 579 passed; CLI help and build passed. README and architecture updated; see ADR 0013. Existing opt-in writes are unchanged.
 
 ## Notes
 

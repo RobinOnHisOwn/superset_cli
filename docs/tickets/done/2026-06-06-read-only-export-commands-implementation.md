@@ -1,6 +1,6 @@
 # Implement read-only export commands
 
-- Status: todo
+- Status: done
 - Priority: medium
 - Type: code
 - Created by: agent
@@ -24,6 +24,10 @@ The design ticket `2026-06-06-read-only-export-commands.md` proposed read-only e
 - [ ] Tests cover happy path, non-zip response, overwrite refusal, `--force`, network error, 404.
 - [ ] `README.md` and `docs/architecture/README.md` are updated.
 - [ ] A decision record is added describing the JSON vs. binary response handling rule for `SupersetClient`.
+
+## Completion evidence
+
+Added binary GET and all four export commands, positive ID/Rison encoding, ZIP validation, and no-overwrite defaults. `tests/test_exports.py`: 31 passed, covering success, force/refusal, invalid archives/IDs, auth/not-found, and network failure. Full suite: 579 passed; CLI help and build passed. README and architecture updated; see ADR 0014.
 
 ## Notes
 

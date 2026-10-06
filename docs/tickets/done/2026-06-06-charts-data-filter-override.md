@@ -1,6 +1,6 @@
 # charts data filter override
 
-- Status: todo
+- Status: done
 - Priority: high
 - Type: code
 - Created by: agent
@@ -25,6 +25,10 @@ This is distinct from the planned `explore` commands, which expose explore *stat
 - [ ] JSON output remains the raw Superset payload. Human output unchanged.
 - [ ] Tests cover: no-override parity with today's behavior, time-range override path, single-filter override path, unknown-chart and auth-state error paths reuse existing patterns.
 - [ ] `README.md` and `docs/architecture/README.md` are updated.
+
+## Completion evidence
+
+Implemented repeatable string equality filters and time-range overrides on copied saved query contexts, with CSRF-enabled POST execution and unchanged no-override GET behavior. `tests/test_chart_data_overrides.py` covers JSON/dict contexts, preserved filters, invalid inputs, and missing/invalid contexts. Existing chart-data tests retain auth/not-found guards. Full suite: 579 passed; CLI help and build passed. README and architecture updated; see ADR 0015. No live verification performed.
 
 ## Notes
 

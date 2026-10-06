@@ -1,6 +1,6 @@
 # charts data CSV output and timestamp conversion
 
-- Status: todo
+- Status: done
 - Priority: medium
 - Type: code
 - Created by: agent
@@ -24,6 +24,10 @@ A tabular output mode would cut both token use for LLM consumers and friction fo
 - [ ] For multi-query payloads, choose and document one of: concatenated with a blank-line separator, or `--query-index N` to pick one. Pick the simpler option and explain why in the plan.
 - [ ] Tests cover: single-query CSV output, multi-query CSV output, epoch-ms conversion, and that JSON mode is unaffected.
 - [ ] `README.md` updated with an example.
+
+## Completion evidence
+
+Implemented `--csv` with blank-line-separated query tables and narrow UTC timestamp conversion. `tests/test_chart_data.py` covers CSV quoting, multiple queries, scalar values, and unchanged JSON. Full suite: 579 passed; CLI help and build passed. See ADR 0012.
 
 ## Notes
 

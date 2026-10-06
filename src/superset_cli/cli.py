@@ -1,4 +1,11 @@
+import csv
+import io
+import os
+from contextvars import ContextVar
 import json
+import zipfile
+from importlib.metadata import version as package_version
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Generator
@@ -6,39 +13,46 @@ from typing import Annotated, Generator
 import httpx
 import typer
 
-from superset_cli.auth import DEFAULT_BROWSER, SUPPORTED_BROWSERS, NoCookiesFoundError, format_expiry, get_auth_status, get_instance_dir, get_storage_state_path, import_browser_cookies, remove_auth_state
-from superset_cli.client import AuthExpiredError, NotFoundError, SupersetClient
+from superset_cli.auth import DEFAULT_BROWSER, SUPPORTED_BROWSERS, NoCookiesFoundError, export_playwright_state, format_expiry, get_auth_status, get_instance_dir, get_storage_state_path, import_browser_cookies, remove_auth_state
+from superset_cli.client import AuthExpiredError, NotFoundError, SupersetClient, format_api_error
 from superset_cli.config import DEFAULT_STATE_DIR, get_instance, load_config, remove_instance, save_config, upsert_instance
-from superset_cli.models import InstanceConfig
+from superset_cli.models import InstanceConfig, AuthConfig, JWTSettings
+from superset_cli.jwt_auth import jwt_status, login_jwt, refresh_jwt
+from superset_cli.instance_selection import InstanceTyper, resolve_instance_name
 
-app = typer.Typer(
+_ACTIVE_INSTANCE: ContextVar[InstanceConfig | None] = ContextVar("superset_instance", default=None)
+
+app = InstanceTyper(
     help="Superset CLI for self-hosted instances. Read commands are unrestricted; every write command requires --allow-write per invocation.",
     no_args_is_help=True,
+    pretty_exceptions_show_locals=False,
 )
-instances_app = typer.Typer(help="Inspect configured Superset instances.")
-auth_app = typer.Typer(help="Authenticate against a configured Superset instance.")
-openapi_app = typer.Typer(help="Fetch the live Superset OpenAPI specification.")
-me_app = typer.Typer(help="Read current-user metadata from a configured Superset instance.")
-dashboards_app = typer.Typer(help="Read dashboards from a configured Superset instance.")
-charts_app = typer.Typer(help="Read charts from a configured Superset instance.")
-datasets_app = typer.Typer(help="Read datasets from a configured Superset instance.")
-databases_app = typer.Typer(help="Read databases from a configured Superset instance.")
-permalinks_app = typer.Typer(help="Resolve Superset permalinks (dashboard, explore, sqllab).")
-datasources_app = typer.Typer(help="Read datasource (table/native) details from a configured Superset instance.")
-annotation_layers_app = typer.Typer(help="Read annotation layers from a configured Superset instance.")
-css_templates_app = typer.Typer(help="Read CSS templates from a configured Superset instance.")
-themes_app = typer.Typer(help="Read themes from a configured Superset instance.")
-tags_app = typer.Typer(help="Read tags from a configured Superset instance.")
-reports_app = typer.Typer(help="Read report schedules from a configured Superset instance.")
-saved_queries_app = typer.Typer(help="Read saved SQL queries from a configured Superset instance.")
-queries_app = typer.Typer(help="Read SQL Lab query history from a configured Superset instance.")
-logs_app = typer.Typer(help="Read action logs and recent activity from a configured Superset instance.")
-sqllab_app = typer.Typer(help="SQL Lab execute, estimate, format, and stop. Write commands require --allow-write.")
-security_app = typer.Typer(help="Security/admin write commands (roles, users, RLS). All require --allow-write.")
-rls_app = typer.Typer(help="Row-level security rule writes. Require --allow-write.")
-import_app = typer.Typer(help="Server-side asset imports via multipart upload. Require --allow-write.")
+instances_app = InstanceTyper(help="Inspect configured Superset instances.")
+auth_app = InstanceTyper(help="Authenticate against a configured Superset instance.")
+openapi_app = InstanceTyper(help="Fetch the live Superset OpenAPI specification.")
+me_app = InstanceTyper(help="Read current-user metadata from a configured Superset instance.")
+dashboards_app = InstanceTyper(help="Read dashboards from a configured Superset instance.")
+charts_app = InstanceTyper(help="Read charts from a configured Superset instance.")
+datasets_app = InstanceTyper(help="Read datasets from a configured Superset instance.")
+databases_app = InstanceTyper(help="Read databases from a configured Superset instance.")
+permalinks_app = InstanceTyper(help="Resolve Superset permalinks (dashboard, explore, sqllab).")
+datasources_app = InstanceTyper(help="Read datasource (table/native) details from a configured Superset instance.")
+annotation_layers_app = InstanceTyper(help="Read annotation layers from a configured Superset instance.")
+css_templates_app = InstanceTyper(help="Read CSS templates from a configured Superset instance.")
+themes_app = InstanceTyper(help="Read themes from a configured Superset instance.")
+tags_app = InstanceTyper(help="Read tags from a configured Superset instance.")
+reports_app = InstanceTyper(help="Read report schedules from a configured Superset instance.")
+saved_queries_app = InstanceTyper(help="Read saved SQL queries from a configured Superset instance.")
+queries_app = InstanceTyper(help="Read SQL Lab query history from a configured Superset instance.")
+logs_app = InstanceTyper(help="Read action logs and recent activity from a configured Superset instance.")
+sqllab_app = InstanceTyper(help="SQL Lab execute, estimate, format, and stop. Write commands require --allow-write.")
+security_app = InstanceTyper(help="Security/admin write commands (roles, users, RLS). All require --allow-write.")
+rls_app = InstanceTyper(help="Row-level security rule writes. Require --allow-write.")
+import_app = InstanceTyper(help="Server-side asset imports via multipart upload. Require --allow-write.")
 app.add_typer(instances_app, name="instances")
 app.add_typer(auth_app, name="auth")
+jwt_app = InstanceTyper(help="Direct JWT login for DB/LDAP deployments; environment-only credentials.")
+auth_app.add_typer(jwt_app, name="jwt")
 app.add_typer(openapi_app, name="openapi")
 app.add_typer(me_app, name="me")
 app.add_typer(dashboards_app, name="dashboards")
@@ -58,7 +72,20 @@ app.add_typer(logs_app, name="logs")
 app.add_typer(sqllab_app, name="sqllab")
 app.add_typer(security_app, name="security")
 security_app.add_typer(rls_app, name="rls")
+roles_app = InstanceTyper(help="Read security roles.")
+users_app = InstanceTyper(help="Read security users (server permissions apply).")
+explore_app = InstanceTyper(help="Read saved-chart Explore state.")
+security_app.add_typer(roles_app, name="roles")
+security_app.add_typer(users_app, name="users")
+app.add_typer(explore_app, name="explore")
 app.add_typer(import_app, name="import")
+
+
+def _show_version(value: bool) -> bool:
+    if value:
+        typer.echo(f"superset-cli {package_version('superset-cli')}")
+        raise typer.Exit()
+    return value
 
 
 @app.callback()
@@ -68,8 +95,12 @@ def main(
         Path | None,
         typer.Option("--config", help="Path to the CLI config file."),
     ] = None,
+    show_version: Annotated[bool, typer.Option("--version", callback=_show_version, is_eager=True, help="Show the running package version.")] = False,
+    instance_override: Annotated[str | None, typer.Option("--instance", help="Instance when the subcommand omits its positional instance.")] = None,
 ) -> None:
-    ctx.obj = {"config_path": config_path}
+    ctx.obj = {"config_path": config_path, "instance_override": instance_override}
+    token = _ACTIVE_INSTANCE.set(None)
+    ctx.call_on_close(lambda: _ACTIVE_INSTANCE.reset(token))
 
 
 def _get_config_path(ctx: typer.Context) -> Path | None:
@@ -84,6 +115,7 @@ def _require_instance(ctx: typer.Context, instance_name: str) -> InstanceConfig:
     if instance is None:
         typer.echo(f"Unknown instance '{instance_name}'. Add it with 'instances add' first.")
         raise typer.Exit(code=1)
+    _ACTIVE_INSTANCE.set(instance)
     return instance
 
 
@@ -98,7 +130,7 @@ def _api_errors() -> Generator[None, None, None]:
         typer.echo(str(exc))
         raise typer.Exit(code=1)
     except httpx.HTTPStatusError as exc:
-        typer.echo(f"Superset API error: HTTP {exc.response.status_code}")
+        typer.echo(format_api_error(exc), err=True)
         raise typer.Exit(code=1)
     except httpx.RequestError as exc:
         typer.echo(f"Network error: could not reach Superset ({exc})")
@@ -130,9 +162,13 @@ def diff_dashboard_records(a: dict, b: dict) -> list[tuple[str, str, str]]:
 
 
 def _require_storage_state(*, instance_name: str, state_dir: Path) -> Path:
-    storage_state_path = get_storage_state_path(state_dir=state_dir, instance_name=instance_name)
+    instance = _ACTIVE_INSTANCE.get()
+    jwt = instance is not None and instance.name == instance_name and instance.auth is not None and instance.auth.mode == "jwt"
+    storage_state_path = (get_instance_dir(state_dir=state_dir, instance_name=instance_name) / "jwt-state.json"
+                          if jwt else get_storage_state_path(state_dir=state_dir, instance_name=instance_name))
     if not storage_state_path.exists():
-        typer.echo(f"No saved auth state for instance '{instance_name}'. Run 'auth login' first.")
+        command = "auth jwt login" if jwt else "auth login"
+        typer.echo(f"No saved auth state for instance '{instance_name}'. Run '{command}' first.")
         raise typer.Exit(code=1)
     return storage_state_path
 
@@ -149,16 +185,45 @@ def list_instances(
             for instance in config.instances
         ]
     }
+    if config.default_instance is not None:
+        payload["default_instance"] = config.default_instance
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
         return
 
+    if config.default_instance is not None:
+        typer.echo(f"Default instance: {config.default_instance}")
     if not payload["instances"]:
         typer.echo("No instances configured.")
         return
 
     for instance in payload["instances"]:
         typer.echo(f"{instance['name']}: {instance['base_url']}")
+
+
+@instances_app.command("use")
+def use_instance(
+    ctx: typer.Context,
+    name: Annotated[str | None, typer.Argument()] = None,
+    clear: Annotated[bool, typer.Option("--clear", help="Remove the persisted default.")] = False,
+    show: Annotated[bool, typer.Option("--show", help="Show the currently resolved instance.")] = False,
+) -> None:
+    if (clear and name) or (show and (clear or name)):
+        raise typer.BadParameter("Choose a name, --clear, or --show.")
+    config = load_config(_get_config_path(ctx))
+    if clear:
+        save_config(config.model_copy(update={"default_instance": None}), _get_config_path(ctx))
+        typer.echo("Cleared default instance.")
+    elif name:
+        if get_instance(config, name) is None:
+            raise typer.BadParameter(f"Unknown instance '{name}'.")
+        save_config(config.model_copy(update={"default_instance": name}), _get_config_path(ctx))
+        typer.echo(f"Default instance: {name}")
+    else:
+        try:
+            typer.echo(resolve_instance_name(config, override=(ctx.obj or {}).get("instance_override")))
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
 
 
 @instances_app.command("add")
@@ -169,7 +234,8 @@ def add_instance(
 ) -> None:
     config_path = _get_config_path(ctx)
     config = load_config(config_path)
-    updated = upsert_instance(config, InstanceConfig(name=name, base_url=base_url))
+    existing = get_instance(config, name)
+    updated = upsert_instance(config, InstanceConfig(name=name, base_url=base_url, auth=existing.auth if existing else None))
     save_config(updated, config_path)
     typer.echo(f"Saved instance '{name}'.")
 
@@ -292,6 +358,90 @@ def auth_logout(
     typer.echo(f"Removed auth state for instance '{instance_name}'.")
 
 
+@jwt_app.command("login")
+def auth_jwt_login(
+    ctx: typer.Context, instance_name: str,
+    username_env: Annotated[str | None, typer.Option("--username-env")] = None,
+    password_env: Annotated[str | None, typer.Option("--password-env")] = None,
+    provider: Annotated[str | None, typer.Option("--provider", help="db or ldap only.")] = None,
+    state_dir: Annotated[Path, typer.Option("--state-dir")] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    instance = _require_instance(ctx, instance_name)
+    existing = instance.auth.jwt if instance.auth and instance.auth.jwt else None
+    try:
+        settings = JWTSettings(username_env=username_env or (existing.username_env if existing else ""),
+                               password_env=password_env or (existing.password_env if existing else ""),
+                               provider=provider or (existing.provider if existing else "db"))
+        username, password = os.environ.get(settings.username_env, ""), os.environ.get(settings.password_env, "")
+        if not username or not password:
+            raise ValueError("Missing credential environment variables.")
+    except ValueError:
+        typer.echo("JWT login needs populated --username-env/--password-env bindings and provider db or ldap.", err=True)
+        raise typer.Exit(code=1)
+    path = get_instance_dir(state_dir=state_dir, instance_name=instance_name) / "jwt-state.json"
+    try:
+        with _api_errors():
+            login_jwt(instance.base_url, path, username=username, password=password, provider=settings.provider)
+        config = load_config(_get_config_path(ctx))
+        instance.auth = AuthConfig(mode="jwt", jwt=settings)
+        save_config(upsert_instance(config, instance), _get_config_path(ctx))
+    except (ValueError, OSError):
+        typer.echo("Could not validate or save JWT state.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps(jwt_status(path)) if as_json else "Saved JWT authentication state.")
+
+
+@jwt_app.command("refresh")
+def auth_jwt_refresh(
+    ctx: typer.Context, instance_name: str,
+    state_dir: Annotated[Path, typer.Option("--state-dir")] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    instance = _require_instance(ctx, instance_name)
+    path = get_instance_dir(state_dir=state_dir, instance_name=instance_name) / "jwt-state.json"
+    try:
+        with _api_errors():
+            with httpx.Client(base_url=instance.base_url, follow_redirects=False, timeout=30) as http:
+                refresh_jwt(http, path)
+    except (ValueError, OSError):
+        typer.echo("JWT refresh failed; run 'auth jwt login'.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps(jwt_status(path)) if as_json else "Refreshed JWT authentication state.")
+
+
+@jwt_app.command("logout")
+def auth_jwt_logout(
+    ctx: typer.Context, instance_name: str,
+    state_dir: Annotated[Path, typer.Option("--state-dir")] = DEFAULT_STATE_DIR,
+) -> None:
+    _require_instance(ctx, instance_name)
+    path = get_instance_dir(state_dir=state_dir, instance_name=instance_name) / "jwt-state.json"
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        typer.echo("Could not remove JWT state.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("Removed JWT authentication state; browser state was preserved.")
+
+
+@auth_app.command("export-playwright")
+def auth_export_playwright(
+    ctx: typer.Context, instance_name: str,
+    output: Annotated[Path, typer.Option("--output", help="New private state file; never overwritten.")],
+    state_dir: Annotated[Path, typer.Option("--state-dir")] = DEFAULT_STATE_DIR,
+    expiry_unit: Annotated[str, typer.Option("--expiry-unit", help="seconds (browser-cookie3) or milliseconds (legacy input).")] = "seconds",
+) -> None:
+    _require_instance(ctx, instance_name)
+    source = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+    try:
+        export_playwright_state(source, output, expiry_unit=expiry_unit)
+    except (ValueError, OSError):
+        typer.echo("Could not export browser state. Check input fields, --expiry-unit, and that --output is a new writable path.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"Exported private browser state to {output}.")
+
+
 @auth_app.command("status")
 def auth_status(
     ctx: typer.Context,
@@ -307,7 +457,8 @@ def auth_status(
     payload = {
         "instance": instance.name,
         "base_url": instance.base_url,
-        **get_auth_status(storage_state_path=storage_state_path),
+        **(jwt_status(storage_state_path) if instance.auth and instance.auth.mode == "jwt"
+           else get_auth_status(storage_state_path=storage_state_path)),
     }
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
@@ -315,6 +466,10 @@ def auth_status(
 
     typer.echo(f"Authenticated: {payload['authenticated']}")
     typer.echo(f"Saved storage state: {payload['storage_state_path']}")
+    if payload.get("mode") == "jwt":
+        typer.echo(f"JWT access expiry: {payload['access_token_exp']}")
+        typer.echo(f"JWT refresh expiry: {payload['refresh_token_exp']}")
+        return
     typer.echo(f"Cookie count: {payload['cookie_count']}")
     typer.echo(f"Earliest cookie expiry: {format_expiry(payload['earliest_cookie_expiry'])}")
     typer.echo(f"Expired: {payload['expired']}")
@@ -922,6 +1077,127 @@ _ORDER_COL_OPT = typer.Option("--order-column", help="Superset list field to ord
 _ORDER_DIR_OPT = typer.Option("--order-direction", help="Sort direction: asc or desc.")
 
 
+@dashboards_app.command("export")
+@charts_app.command("export")
+@datasets_app.command("export")
+@databases_app.command("export")
+def assets_export(
+    ctx: typer.Context, instance_name: str, ids: Annotated[list[int], typer.Argument()],
+    output: Annotated[Path, typer.Option("--output", help="Destination ZIP file.")],
+    force: Annotated[bool, typer.Option("--force", help="Overwrite an existing output file.")] = False,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+) -> None:
+    if any(pk < 1 for pk in ids):
+        typer.echo("Export requires positive integer IDs.", err=True)
+        raise typer.Exit(code=2)
+    if output.exists() and not force:
+        typer.echo("Output already exists; use --force to overwrite.", err=True)
+        raise typer.Exit(code=1)
+    instance = _require_instance(ctx, instance_name)
+    storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+    resource = ctx.parent.info_name[:-1]
+    with _api_errors():
+        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+            content, content_type, _ = client.export_assets(resource, ids)
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type not in {"application/zip", "application/octet-stream", "application/x-zip-compressed"} or not zipfile.is_zipfile(io.BytesIO(content)):
+        typer.echo("Export response is not a ZIP archive; no file written.", err=True)
+        raise typer.Exit(code=1)
+    try:
+        with output.open("wb" if force else "xb") as destination:
+            destination.write(content)
+    except OSError as exc:
+        typer.echo(f"Could not write export: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Exported {len(ids)} {resource}(s) to {output}.")
+
+
+@roles_app.command("list")
+def security_roles_list(
+    ctx: typer.Context, instance_name: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    search: Annotated[str | None, typer.Option("--search")] = None,
+) -> None:
+    _run_list(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+              list_call=lambda c: c.list_roles(search=search), empty_message="No roles found.",
+              line_formatter=lambda x: f"{x.get('id')}: {x.get('name')}")
+
+
+@roles_app.command("get")
+def security_roles_get(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    _run_get(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+             get_call=lambda c: c.get_role(pk), human_lines=lambda x: [f"{x.get('id')}: {x.get('name')}"])
+
+
+@users_app.command("list")
+def security_users_list(
+    ctx: typer.Context, instance_name: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    search: Annotated[str | None, typer.Option("--search")] = None,
+) -> None:
+    _run_list(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+              list_call=lambda c: c.list_users(search=search), empty_message="No users found.",
+              line_formatter=lambda x: f"{x.get('id')}: {x.get('username')}")
+
+
+@users_app.command("get")
+def security_users_get(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    _run_get(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+             get_call=lambda c: c.get_user(pk), human_lines=lambda x: [f"{x.get('id')}: {x.get('username')}"])
+
+
+@rls_app.command("list")
+def security_rls_list(
+    ctx: typer.Context, instance_name: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    _run_list(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+              list_call=lambda c: c.list_rls_rules(), empty_message="No RLS rules found.",
+              line_formatter=lambda x: f"{x.get('id')}: {x.get('name')}")
+
+
+@rls_app.command("get")
+def security_rls_get(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    _run_get(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+             get_call=lambda c: c.get_rls_rule(pk), human_lines=lambda x: [f"{x.get('id')}: {x.get('name')}"])
+
+
+@explore_app.command("show")
+def explore_show(
+    ctx: typer.Context, instance_name: str,
+    slice_id: Annotated[int, typer.Option("--slice-id", min=1)],
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    _run_get(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+             get_call=lambda c: c.get_explore(slice_id), human_lines=lambda x: [json.dumps(x, indent=2)])
+
+
+@explore_app.command("form-data")
+def explore_form_data(
+    ctx: typer.Context, instance_name: str, key: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    _run_get(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+             get_call=lambda c: c.get_explore_form_data(key), human_lines=lambda x: [json.dumps(x, indent=2)])
+
+
 @annotation_layers_app.command("list")
 def annotation_layers_list(
     ctx: typer.Context,
@@ -1365,24 +1641,72 @@ def charts_data(
     pk: str,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
+    as_csv: Annotated[bool, typer.Option("--csv", help="CSV tables separated by a blank line; __timestamp in UTC.")] = False,
+    time_range: Annotated[str | None, typer.Option("--time-range", help="Override every query's Superset time range.")] = None,
+    filters: Annotated[list[str] | None, typer.Option("--filter", help="Append a string equality filter col=value; repeatable.")] = None,
 ) -> None:
+    query_filters = []
+    for value in filters or []:
+        col, separator, val = value.partition("=")
+        if not separator or not col.strip() or not val:
+            typer.echo("--filter requires col=value with a nonempty column and value.", err=True)
+            raise typer.Exit(code=2)
+        query_filters.append({"col": col.strip(), "op": "==", "val": val})
+    if time_range is not None and not time_range.strip():
+        typer.echo("--time-range must not be empty.", err=True)
+        raise typer.Exit(code=2)
+    if as_json and as_csv:
+        typer.echo("--csv and --json cannot be used together.", err=True)
+        raise typer.Exit(code=2)
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
         with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
-            payload = client.get_chart_data(pk)
+            try:
+                payload = (client.get_chart_data(pk, time_range=time_range, filters=query_filters)
+                           if time_range is not None or query_filters else client.get_chart_data(pk))
+            except ValueError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(code=2) from exc
+    queries = payload.get("result") or []
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
-        return
-    queries = payload.get("result", [])
-    typer.echo(f"Queries: {len(queries)}")
-    for idx, query in enumerate(queries):
-        rowcount = query.get("rowcount")
-        if rowcount is None:
-            data = query.get("data") or []
-            rowcount = len(data)
-        cols = query.get("colnames") or []
-        typer.echo(f"  [{idx}] rows={rowcount} columns={','.join(cols)}")
+    elif as_csv:
+        for idx, query in enumerate(queries):
+            if idx:
+                typer.echo()
+            output = io.StringIO()
+            writer = csv.writer(output, lineterminator="\n")
+            cols = query.get("colnames") or []
+            writer.writerow(cols)
+            for row in query.get("data") or []:
+                values = []
+                for col in cols:
+                    value = row.get(col)
+                    if col == "__timestamp" and isinstance(value, (int, float)) and not isinstance(value, bool):
+                        try:
+                            value = datetime.fromtimestamp(value / 1000, timezone.utc).isoformat()
+                        except (OverflowError, OSError, ValueError):
+                            pass  # Keep out-of-range values inspectable instead of failing output.
+                    values.append(value)
+                writer.writerow(values)
+            typer.echo(output.getvalue(), nl=False)
+    else:
+        typer.echo(f"Queries: {len(queries)}")
+        for idx, query in enumerate(queries):
+            rowcount = query.get("rowcount")
+            if rowcount is None:
+                rowcount = len(query.get("data") or [])
+            cols = query.get("colnames") or []
+            typer.echo(f"  [{idx}] rows={rowcount} columns={','.join(cols)}")
+    successful = [query for query in queries if query.get("status", "success") == "success"]
+    if queries and not successful:
+        detail = next((query.get("error") for query in queries if query.get("error")), "unknown error")
+        typer.echo(f"chart queries failed: {' '.join(str(detail).split())[:300]}", err=True)
+        raise typer.Exit(code=1)
+    if not any(query.get("data") for query in successful):
+        typer.echo("chart returned 0 rows", err=True)
+        raise typer.Exit(code=1)
 
 
 # ----- write-command infrastructure (ADR 0009, 0010) -----
@@ -1446,6 +1770,94 @@ def _run_write(
     typer.echo(human_line)
 
 
+def _run_owner_call(ctx: typer.Context, instance_name: str, state_dir: Path, as_json: bool, call) -> None:
+    resource = ctx.parent.info_name[:-1]
+    instance = _require_instance(ctx, instance_name)
+    storage = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+    with _api_errors():
+        with SupersetClient(base_url=instance.base_url, storage_state_path=storage) as client:
+            try:
+                payload = call(client, resource)
+            except ValueError as exc:
+                typer.echo(str(exc), err=True)
+                raise typer.Exit(code=1) from exc
+    if as_json:
+        typer.echo(json.dumps(payload, separators=(",", ":")))
+    elif "count" in payload:
+        typer.echo(f"Count: {payload['count']}")
+        for owner in payload["result"]:
+            typer.echo(f"{owner['value']}: {owner['text']}")
+        if not payload["result"]:
+            typer.echo("No eligible owners.")
+    else:
+        if "write_performed" in payload:
+            if payload["write_performed"] is None:
+                typer.echo("Owner write outcome is unknown.")
+            else:
+                typer.echo("Owner update sent." if payload["write_performed"] else "No owner change needed (no PUT).")
+        typer.echo(f"Effective owners of {resource} {payload['id']}:" if payload["owners"] is not None
+                   else "Effective owners could not be verified.")
+        if payload["owners"] is not None:
+            for owner in payload["owners"]:
+                name = " ".join(str(owner.get(key) or "") for key in ("first_name", "last_name")).strip()
+                typer.echo(f"{owner['id']}: {name}")
+            if not payload["owners"]:
+                typer.echo("No owners.")
+    if payload.get("warning"):
+        typer.echo(payload["warning"], err=True)
+        raise typer.Exit(code=1)
+
+
+@dashboards_app.command("owners")
+@charts_app.command("owners")
+def resource_owners(
+    ctx: typer.Context, instance_name: str, identifier: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """Inspect this resource's owners, not its creators or other resources' owners."""
+    _run_owner_call(ctx, instance_name, state_dir, as_json, lambda c, r: c.get_owners(r, identifier))
+
+
+@dashboards_app.command("owner-candidates")
+@charts_app.command("owner-candidates")
+def owner_candidates(
+    ctx: typer.Context, instance_name: str,
+    search: Annotated[str | None, typer.Option("--search", help="Server-filtered name/username search.")] = None,
+    page: Annotated[int | None, typer.Option("--page", min=0, help="Page index (0-based).")] = None,
+    page_size: Annotated[int | None, typer.Option("--page-size", min=1)] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """Discover eligible owners through this resource's permission-filtered related API."""
+    _run_owner_call(ctx, instance_name, state_dir, as_json,
+                    lambda c, r: c.get_owner_candidates(r, search=search, page=page, page_size=page_size))
+
+
+@dashboards_app.command("owners-set")
+@charts_app.command("owners-set")
+@dashboards_app.command("owners-add")
+@charts_app.command("owners-add")
+@dashboards_app.command("owners-remove")
+@charts_app.command("owners-remove")
+def resource_owners_change(
+    ctx: typer.Context, instance_name: str, identifier: str,
+    owner_ids: Annotated[list[int] | None, typer.Option("--owner-id", min=1, help="Positive user ID; repeat for multiple owners.")] = None,
+    clear: Annotated[bool, typer.Option("--clear", help="Explicit empty replacement or permission to remove the last owner; not for add.")] = False,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    """Set/add/remove owners and verify effective state. Non-admin callers may be retained.
+
+    Add/remove is non-atomic read-modify-write. Never blindly retry a sent mutation.
+    """
+    operation = ctx.info_name.rsplit("-", 1)[1]
+    _require_allow_write(allow_write, action=f"{operation} owners of {ctx.parent.info_name[:-1]} {identifier} on instance '{instance_name}'")
+    _run_owner_call(ctx, instance_name, state_dir, as_json,
+                    lambda c, r: c.change_owners(r, identifier, operation=operation, owner_ids=owner_ids, clear=clear))
+
+
 @app.command("api")
 def api_request(
     ctx: typer.Context,
@@ -1485,6 +1897,14 @@ def api_request(
     if (body is not None or file is not None) and not isinstance(payload_body, dict):
         raise typer.BadParameter("The request body must be a JSON object.")
     instance = _require_instance(ctx, instance_name)
+    if instance.auth and instance.auth.mode == "jwt":
+        storage_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+        with _api_errors():
+            with SupersetClient(base_url=instance.base_url, storage_state_path=storage_path) as client:
+                client.request("GET", "/api/v1/me/")
+                payload = client.request(method, path, params=params, json_body=payload_body)
+        typer.echo(json.dumps(payload, separators=(",", ":") if as_json else None, indent=None if as_json else 2))
+        return
     storage_path = get_storage_state_path(state_dir=state_dir, instance_name=instance_name)
 
     def validate(candidate: Path) -> bool:
