@@ -82,6 +82,14 @@ For CLI changes:
 - preserve existing JSON output shape unless the contract is intentionally changed
 - when changing the contract, update tests and docs in the same task
 
+## CLI output and CI verification
+
+- Before adding CLI tests, inspect nearby tests and reuse their output normalization and environment setup.
+- Assert semantic help text, not raw terminal output. For Rich/Typer help, normalize with `Text.from_ansi(result.stdout).plain`.
+- Every new help-output test must cover forced-color and no-color environments. Do not disable colors merely to hide failures.
+- Before committing, inspect `.github/workflows/ci.yml` and reproduce relevant CI conditions, including supported Python versions, locked dependencies, and terminal/color settings. Report any untested matrix conditions explicitly.
+- After an authorized push, inspect all CI checks. Report pending or failed checks explicitly; local test success is not CI success.
+
 ## Decision memory rules
 
 - Treat `docs/decisions/` as the canonical long-term memory for why this repository works the way it does.

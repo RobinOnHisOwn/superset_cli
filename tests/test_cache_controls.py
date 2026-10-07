@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from rich.text import Text
 from typer.testing import CliRunner
 
 from superset_cli import cli
@@ -260,8 +261,15 @@ def test_missing_invalidation_endpoint_blocks_before_write(api):
     assert not any(req.method == "POST" for req in api.requests)
 
 
-def test_cache_help_explains_write_guard():
+@pytest.mark.parametrize("force_color", [False, True])
+def test_cache_help_explains_write_guard(monkeypatch, force_color):
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FORCE_COLOR" if force_color else "NO_COLOR", "1")
     for args in [["cache", "invalidate", "--help"], ["charts", "data", "--help"]]:
         result = runner.invoke(cli.app, args)
         assert result.exit_code == 0
-        assert "--allow-write" in result.output and "dry-run" in result.output
+        if force_color:
+            assert "\x1b[" in result.stdout
+        help_text = Text.from_ansi(result.stdout).plain
+        assert "--allow-write" in help_text and "dry-run" in help_text
