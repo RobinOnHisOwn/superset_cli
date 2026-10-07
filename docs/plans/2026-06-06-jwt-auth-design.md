@@ -34,7 +34,7 @@ The login and refresh endpoints come from Flask-AppBuilder (`flask_appbuilder/se
 ### CSRF
 
 - The login and refresh endpoints are unprotected by CSRF (CSRF gates the browser-MVC routes). A JSON POST without a CSRF token is accepted.
-- The CSRF token endpoint `/api/v1/security/csrf_token/` (confirmed in `superset/security/api.py`) is for browser-session callers. **JWT bearer auth does not need it.**
+- Correction verified against Superset 6.1.0 source on 2026-10-06: `BaseSupersetApiMixin.csrf_exempt = False`, so modifying Superset API calls require CSRF even with JWT. Login/refresh inherit FAB's CSRF-exempt BaseApi, but ordinary modifying calls retain CSRF acquisition and handling. See ADR 0018.
 
 ### Endpoint coverage
 

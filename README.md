@@ -16,6 +16,23 @@ Current scope (read by default, write opt-in):
 - shared list-query controls on all list commands via `--page` (0-based), `--page-size`, `--search`, `--order-column`, and `--order-direction`
 - user-friendly error messages for auth expiry, missing resources, and network failures (exit code 1, no raw tracebacks)
 
+## HTTP timeouts
+
+Use the root `--timeout SECONDS` option **before the command** for slow API requests:
+
+```bash
+superset-cli --timeout 90 charts data prod 7 --json
+superset-cli --timeout 90 api prod /api/v1/dashboard/
+```
+
+The default remains 30 seconds. Values must be finite and positive. The option
+applies to API requests, authentication validation/recovery, CSRF acquisition,
+and JWT login/refresh. It controls HTTPX connect/read/write/pool phase or
+inactivity timeouts, **not a total command deadline**. It is not saved in config.
+A timeout exits non-zero; a sent mutation's outcome is unknown. Check server
+state before retrying. The CLI never automatically retries a sent mutation;
+`--allow-write` is still required on every write invocation.
+
 ## Decision log
 
 Long-lived technical reasoning lives in `docs/decisions/`.
@@ -33,7 +50,7 @@ A structural overview of modules, command-to-code mappings, and test entry point
 
 ## Installation for users
 
-After the first PyPI release, install the CLI without cloning this repository:
+Install the published CLI without cloning this repository:
 
 ```bash
 uv tool install superset-cli
@@ -42,7 +59,9 @@ superset-cli --help
 
 Upgrade with `uv tool upgrade superset-cli`. Python 3.12 or newer is required;
 uv can provision Python when needed. `pipx install superset-cli` is an alternative.
-The release workflow exists, but a published package is not yet confirmed.
+PyPI `0.1.0` was verified on 2026-10-06: its wheel includes the API command, CSRF handling, validated cookie-import fallback, and `--clear-query-context`, but no `--version` flag. A local installation also labeled `0.1.0` lacked those capabilities; version labels alone are insufficient. This checkout builds distinct **0.2.0** artifacts with `--version`; they have not been published.
+
+Check `command -v superset-cli`, then its installation owner (`uv tool list` or `pipx list`). If it is installed but missing from PATH, use `uv tool update-shell` or `pipx ensurepath` rather than installing another copy. Upgrade with the same tool (`uv tool upgrade superset-cli` or `pipx upgrade superset-cli`). Config/auth files remain separate from the package installation. Check `api --help` and `charts update --help` once per session for required capabilities; use `--version` when available. Inside this source checkout, select `uv run superset-cli` explicitly.
 
 ## Publishing releases (maintainers)
 
@@ -113,6 +132,121 @@ The command validates the saved session before sending the request. Missing or r
 You must already be signed in in that browser. Recovery progress goes to stderr; no browser is launched and sent mutations are never retried. Network errors and permission failures do not trigger recovery.
 Only instance-relative `/api/v1/` paths are accepted and redirects are not followed. Custom requests handle CSRF automatically. Existing commands retain their explicit login behavior.
 
+## Instance selection
+
+When the positional instance is omitted, precedence is global `--instance`,
+`SUPERSET_CLI_INSTANCE`, persisted `default_instance`, then the sole configured
+instance. A supplied positional instance always wins for fixed-arity commands.
+Unknown selected names and multiple instances without a default fail explicitly.
+`instances list` shows a persisted default; its JSON adds `default_instance` only
+when one is configured. Removing that instance clears the default.
+
+```bash
+uv run superset-cli instances use prod
+uv run superset-cli instances use --show
+uv run superset-cli --instance prod charts get 10 --json
+uv run superset-cli charts list --json
+uv run superset-cli instances use --clear
+```
+
+Variadic exports treat numeric positionals as IDs when global `--instance` is
+provided. If a numeric value could be either a configured instance name or an
+export ID, the CLI refuses to guess: use `--instance NAME` and supply only IDs.
+
+## JWT authentication (DB/LDAP only)
+
+Browser cookies remain the default. Deployments accepting direct DB or LDAP
+login can use JWT instead; OAuth/OIDC/SAML/REMOTE_USER are not supported by the
+JWT login endpoint. Supply credentials through existing environment variables,
+never command-line password values or config-file secrets.
+
+```bash
+uv run superset-cli auth jwt login prod --username-env EXAMPLE_USER --password-env EXAMPLE_PASSWORD
+uv run superset-cli auth jwt refresh prod
+uv run superset-cli auth status prod --json
+uv run superset-cli auth jwt logout prod
+```
+
+Successful JWT login stores only environment-variable bindings/provider in the
+instance's `auth` config and selects `mode: jwt`. Tokens live in private
+`jwt-state.json` (0600), separately from browser state. `auth status` reports only
+expiry claims, which are unverified and display-only; it never prints tokens.
+JWT GET requests get one refresh-and-retry on 401. Sent writes are never retried;
+refresh explicitly before rerunning an authorized write. CSRF handling remains
+required for modifying Superset APIs, including JWT calls. Logout removes JWT
+state only. To return to browser auth, set `auth.mode: cookie` in the instance
+config and use the normal browser login flow. JWT API calls never import browser
+cookies automatically. JWT login/refresh/API calls require HTTPS, except HTTP
+loopback development (`localhost` or loopback IP literals); embedded URL
+credentials and malformed bearer values are rejected without echoing secrets.
+Updating an instance URL preserves its selected auth mode and bindings.
+
+## API-key authentication (capability-gated)
+
+The source-verified combination is **Superset 6.1.0 with Flask-AppBuilder 5.2.2**,
+`FAB_API_KEY_ENABLED=True`, initialized key storage, an active issued key, and a
+matching prefix. Superset's version alone does not guarantee support. No real
+API-key deployment was exercised during implementation; see [ADR 0023](docs/decisions/0023-environment-bound-api-keys.md).
+
+Provide an existing issued key through a secure environment injector, never a
+literal CLI argument or config value. Register only its environment-variable name:
+
+```bash
+superset-cli auth api-key set prod --env EXAMPLE_SUPERSET_API_KEY --json
+superset-cli auth validate prod --json
+superset-cli charts list prod --json
+superset-cli auth api-key clear prod --json
+```
+
+`set` verifies a read-only `/api/v1/me/` request before saving the binding. Use
+`--prefix` if the server's configured prefix differs from `sst_`. The CLI does not
+issue/revoke keys, enable server flags, or upgrade server dependencies. Unsupported
+or rejected authentication fails without saving a binding or browser/JWT fallback.
+Keys are reread from the environment per invocation and never saved in auth files.
+HTTPS is required except loopback HTTP development; redirects and embedded URL
+credentials are rejected. CSRF, timeouts, and per-invocation `--allow-write` remain
+required as applicable; sent mutations never replay. `auth status` reports local
+credential availability, not current server acceptance. `clear` returns to cookie
+mode without deleting cookie/JWT files. Selecting API-key mode replaces prior auth
+bindings; clearing it does not restore JWT credential bindings or the previous mode.
+Reconfigure JWT explicitly when switching back. API keys cannot be exported to Playwright.
+
+## Resource list controls
+
+All 15 resource/security lists support optional `--filter`, `--columns`, and `--all`.
+`instances list` is local, not paginated. Ordinary single-page output is unchanged.
+
+```bash
+superset-cli charts list prod --filter '{"col":"viz_type","opr":"eq","value":"table"}' --columns id --columns slice_name --json
+superset-cli logs list prod --filter '{"col":"dttm","opr":"gt","value":"2026-01-01"}' --json
+superset-cli dashboards list prod --all --page-size 100 --json
+```
+
+Repeat JSON-object filters with exactly `col`, `opr`, and `value`. Values retain
+JSON types (strings, numbers, booleans, null, arrays); filters AND together and
+append to `--search`. This is distinct from chart-data `--filter col=value`.
+Resource `_info` determines supported fields/operators; unsupported combinations
+fail rather than using a guessed universal catalog. When a resource omits `_info`
+(as Superset 6.1.0 logs do), the list endpoint validates the filter directly.
+Permission failures never trigger this fallback.
+
+Repeat `--columns FIELD` once per unique field. Resource list metadata is checked
+before requesting `q.columns` on the server. Projected human output is compact
+JSON per returned row, so omitted default fields do not produce `None` placeholders.
+Single-page `--json` preserves the server envelope.
+
+`--all` starts at page zero, rejects explicit `--page`, and requests 100 records
+per page unless `--page-size` is given. Server caps are respected. Filters,
+projection, and ordering persist across pages; ID ordering is preferred only
+when advertised, otherwise explicit/server ordering is retained. Server `ids`
+allow duplicate checks without adding an unrequested ID field to the projection.
+The aggregate JSON envelope is exactly `{count, ids, result}`. No aggregate is
+printed if a later page fails, counts change, identities duplicate, or pages stop
+early. **This is not an atomic snapshot**: non-unique ordering and concurrent
+changes can still affect completeness even when checks pass. Buffering `--all`
+uses memory proportional to the result. Capability checks add small read requests;
+legacy single-page lists without new controls add none. See [ADR 0022](docs/decisions/0022-explicit-list-query-controls.md).
+
 ## Current commands
 
 ```bash
@@ -152,6 +286,7 @@ uv run superset-cli databases tables prod 1 --schema analytics --json
 uv run superset-cli dashboards embedded prod 7 --json
 uv run superset-cli datasets related prod 21 --json
 uv run superset-cli charts data prod 10 --json
+uv run superset-cli charts data prod 10 --csv
 uv run superset-cli annotation-layers list prod --json
 uv run superset-cli annotation-layers get prod 50 --json
 uv run superset-cli css-templates list prod --json
@@ -171,7 +306,81 @@ uv run superset-cli logs get prod 1 --json
 uv run superset-cli logs recent-activity prod --json
 uv run superset-cli permalinks resolve prod dashboard abc123 --json
 uv run superset-cli datasources column-values prod table 21 country --json
+uv run superset-cli security roles list prod --search Analyst --json
+uv run superset-cli security roles get prod 7 --json
+uv run superset-cli security users list prod --search reader --json
+uv run superset-cli security users get prod 7 --json
+uv run superset-cli security rls list prod --json
+uv run superset-cli security rls get prod 7 --json
+uv run superset-cli explore show prod --slice-id 10 --json
+uv run superset-cli explore form-data prod example-key --json
 ```
+
+Security reads obey server permissions; user endpoints may require server-side
+`FAB_ADD_SECURITY_API`. Human output is limited to ID/name or username; user JSON
+may contain personal metadata. Explore commands inspect saved state only, without
+executing a query or creating an exploration.
+
+### Chart data output
+
+`charts data` exits 1 when every query fails or no successful query returns rows.
+A successful scalar row (including zero or NULL) remains valid. Mixed results
+succeed when at least one successful query has rows. With `--json`, the unchanged
+raw payload is still printed to stdout on failure; a short diagnostic goes to stderr.
+
+`--csv` emits column headers from `colnames` and one CSV table per query, separated
+by a blank line. Numeric `__timestamp` values become ISO-8601 UTC timestamps;
+other numeric columns remain unchanged. It cannot be combined with `--json`.
+
+`--time-range` replaces the time range on every saved query. Repeatable
+`--filter col=value` appends string equality filters to every query, preserving
+existing filters. Values may contain `=`; empty columns/values are rejected.
+These options execute a copied query context through the chart-data POST API
+with CSRF handling; they do not save chart changes. Without overrides, the
+original saved-chart GET endpoint is used. The chart must have a usable saved
+`query_context` (save it in Explore first if missing).
+
+```bash
+uv run superset-cli charts data prod 10 --time-range '2026-04-01 : 2026-05-01' --filter region=west --json
+```
+
+### Read-only ZIP exports
+
+```bash
+uv run superset-cli dashboards export prod 7 8 --output dashboards.zip
+uv run superset-cli charts export prod 10 --output charts.zip
+uv run superset-cli datasets export prod 21 --output datasets.zip
+uv run superset-cli databases export prod 1 --output databases.zip
+```
+
+Exports require positive integer IDs and a ZIP response. Existing output files
+are refused unless `--force` is supplied; use a new destination to preserve an
+older archive. Export files may contain sensitive connection or asset metadata.
+There is no `--json` export mode and no server mutation.
+
+### Chart and dashboard owners
+
+These commands use legacy integer **user owner IDs**, verified against Superset 6.0 source. Inspect the target's capabilities; newer editor/viewer subject IDs are not interchangeable. Owners are independent of creators, last modifiers, viewers, dashboard roles, and ownership of related charts/datasets.
+
+```bash
+uv run superset-cli dashboards owners prod example-dashboard --json
+uv run superset-cli charts owners prod 7 --json
+uv run superset-cli dashboards owner-candidates prod --search Reader --page 0 --page-size 20 --json
+uv run superset-cli charts owner-candidates prod --search Reader --json
+uv run superset-cli dashboards owners-set prod example-dashboard --owner-id 2 --owner-id 3 --allow-write
+uv run superset-cli charts owners-add prod 7 --owner-id 3 --allow-write --json
+uv run superset-cli dashboards owners-remove prod 7 --owner-id 3 --allow-write
+uv run superset-cli charts owners-set prod 7 --clear --allow-write
+uv run superset-cli dashboards owners-remove prod 7 --owner-id 2 --clear --allow-write
+```
+
+Both groups provide `owners`, `owner-candidates`, `owners-set`, `owners-add`, and `owners-remove`. Chart UUIDs and dashboard slugs resolve through details to a numeric primary key before writes. Candidate discovery preserves the permission-filtered `count`/`result` envelope and searches names/usernames using the server's related-field `filter`; it does not require the security user directory. Missing or unsupported owner fields are errors, not empty lists.
+
+Every owner mutation, **including no-ops**, requires literal `--allow-write` before any API request. IDs must be positive integers; repeat `--owner-id`, duplicates are removed, and display names are never resolved automatically. Replacement requires either IDs or `--clear`, not both. Removal of the last owner requires `--clear`; clear intent does not override server permissions. Already-present adds, absent removals, and unchanged replacements send no PUT.
+
+Before writing, the target OpenAPI must document an integer `owners` array in the resource's PUT schema; unsupported/unavailable schemas fail closed. Only `owners` is submitted, with existing CSRF transport and no query-context clearing. Superset can retain a non-admin caller omitted from the requested list. Each sent update is read back: a requested transfer or self-removal is not reported as successful if effective owners differ. Add/remove is **non-atomic read-modify-write** and can overwrite concurrent owner edits; no unverified ETag support or atomicity is claimed.
+
+Inspection JSON is `{"resource":"chart","id":7,"owners":[...]}`. Mutation JSON adds `operation`, `requested_owner_ids`, `write_performed`, `verified`, `matches_requested`, and `warning`. `write_performed` is `false` for a no-op, `true` after successful PUT, or `null` for an uncertain network outcome. If read-back fails, `owners` and `matches_requested` are `null` and `verified` is `false`. A mismatch, failed read-back, or unknown outcome emits evidence then exits **1**; inspect effective owners before retrying. No mutation is automatically retried. Existing `get --json` and generic `update --json` are unchanged. See [ADR 0020](docs/decisions/0020-guarded-resource-owners.md).
 
 ## Write commands
 
@@ -242,6 +451,101 @@ uv run superset-cli import upload prod chart     --file bundle.zip --overwrite -
 ```
 
 Both `--body '<json>'` and `--file <path-to-json>` accept the request payload. Pass `--body -` to read JSON from stdin. The two flags are mutually exclusive.
+
+## Troubleshooting API failures
+
+Generic HTTP failures print method, instance-relative path, status, and bounded,
+redacted server details to stderr. Successful JSON stdout is unchanged. HTML
+error pages are summarized rather than echoed; use server logs for their details.
+Treat diagnostics as sensitive when sharing them.
+
+Use the evidence, not identical retries: a 400 mentioning CSRF requires checking
+auth/CSRF handling; validation errors require correcting the supplied fields.
+A 403 is a permission failure, not proof that login expired. Authentication and
+not-found errors retain their existing handling. No sent mutation is retried
+automatically. If output is insufficient, inspect the live OpenAPI specification
+and authorized server logs rather than extracting cookies into another client.
+
+## Authenticated API escape hatch
+
+After one capability check (`api --help`), prefer `api` for supported REST paths
+that lack a named command, rather than writing an ad-hoc cookie/CSRF client.
+Paths must stay under `/api/v1/` on the configured instance; no absolute URLs,
+redirect following, traversal, or cookie values copied into another tool.
+
+```bash
+uv run superset-cli api prod /api/v1/dashboard/7
+uv run superset-cli api prod /api/v1/_openapi --json
+uv run superset-cli api prod /api/v1/dashboard/ --param 'q=(page:0,page_size:10)' --json
+uv run superset-cli api prod /api/v1/dashboard/7 --method PUT --body '{"dashboard_title":"Example"}' --allow-write
+```
+
+Repeat `--param KEY=VALUE` for more parameters. Duplicate keys stay repeated on
+the wire; select keys/encoding from the live schema, not guessed conventions.
+All non-GET methods require literal per-invocation `--allow-write`. The wrapper
+fetches CSRF automatically. Missing/rejected saved auth gets one announced,
+validated cookie-import attempt; it does not launch a browser. Import must
+validate `/api/v1/me/` before persisting state. If the loader exposes no usable
+cookie, switch to an accessible supported-browser session or report blocked. Network failures and 403 are not login-expiry evidence. A sent
+mutation is never replayed: inspect the instance before explicitly rerunning it.
+A stale cookie and no cookie exposed by the loader are different outcomes; stop
+repeat login/restart loops when the browser state is inaccessible. Prefer an
+accessible supported-browser session, or report blocked.
+
+Dashboard/theme/CSS diagnostics may inspect fields with GET without write
+permission. Temporary changes still require explicit operator authorization,
+`--allow-write` on every call, an original-value backup, and restoration. This
+recipe does not grant that authorization. Confirm relevant calls and schema
+against the live OpenAPI specification when version-specific behavior matters.
+
+## Optional browser render verification
+
+Core login/API use does not require Playwright. For an already authenticated
+browser-render check, export a **new** private state file without changing the
+CLI state. Cookie units are explicit, not guessed from their magnitude:
+`browser-cookie3` 0.20.1's Chromium/Firefox/Safari loaders use Unix **seconds**;
+its Firefox sessionstore extraction has absent expiry. For any other source,
+verify its convention before choosing `seconds` or `milliseconds`. Absent,
+zero, and negative session expiry become Playwright's `-1`. Malformed expiry
+fails before output; secure/httpOnly/sameSite attributes are retained when
+available. The exporter does not access browser databases or renew auth.
+
+```bash
+work=$(mktemp -d /tmp/superset-render.XXXXXX)
+uv run superset-cli auth export-playwright prod --output "$work/state.json" --expiry-unit seconds
+uv run --with playwright python scripts/verify_dashboard.py --help
+```
+
+The helper requires `--instance`, `--dashboard`, `--state`, and repeatable
+`--expect` content selectors. From this checkout, invoke it with the exported
+state and an installed browser. For example, set `CHROME` to the verified local
+browser executable and use the dashboard's inspected rendered-content selector
+(the following array syntax works in Bash/Zsh):
+
+```bash
+CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+args=(--instance prod --dashboard 7 --state "$work/state.json")
+args+=(--expect '[data-test-chart-id="10"] canvas' --browser-executable "$CHROME")
+uv run --with playwright python scripts/verify_dashboard.py "${args[@]}"
+```
+
+Replace the example IDs/selector with discovered target values: a chart wrapper
+or arbitrary nonempty HTML is not render evidence. `--tab NAME` paired with
+`--tab-expect SELECTOR` validates a second representative tab; `--min-tabs` checks
+the discovered tab count. `--screenshot-dir` captures each verified view at the
+requested viewport; `--screenshot-selector` captures an inner dashboard container
+instead. The JSON summary contains bounded console/page-error counts, not their
+potentially sensitive text. HTTP 200 or a screenshot alone never counts as
+verified: login, blank/hidden chart output, loading timeout, explicit chart error,
+or page error exit nonzero. Treat such results as failed/blocked, not success.
+Checks cover DOM text, nonempty SVG geometry, and nontransparent 2D-canvas
+pixels, including native opacity/content-visibility checks and scrolling the
+selected content into view. Unsupported or tainted canvases are blocked. This is
+not a visual-regression or query-semantics oracle: inspect screenshots for color
+contrast/occlusion and compare with a known-good reference at the same viewport.
+State and screenshots can be sensitive; keep them out of git and remove the
+private temporary directory after inspection. Synthetic Chrome tests validate
+this recipe, not any real instance's current render or authentication.
 
 ## Local Superset for testing
 
