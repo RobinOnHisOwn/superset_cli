@@ -1966,6 +1966,73 @@ def _require_allow_write(allow_write: bool, *, action: str) -> None:
     raise typer.Exit(code=1)
 
 
+def _run_api_key_lifecycle(ctx, instance_name, state_dir, as_json, operation, key_uuid=None):
+    instance = _require_instance(ctx, instance_name)
+    try:
+        state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+        with _client(instance=instance, storage_state_path=state_path) as client:
+            method = getattr(client, f"{operation}_api_key" + ("s" if operation == "list" else ""))
+            payload = method() if operation == "list" else method(key_uuid)
+    except (AuthExpiredError, NotFoundError, httpx.HTTPError, ValueError, OSError):
+        # Lifecycle responses/errors are untrusted; never forward their bodies.
+        if operation == "revoke":
+            typer.echo(f"API-key revocation unverified for {key_uuid}; reconcile using an independent authorized credential before retrying.", err=True)
+        else:
+            typer.echo("Could not read API-key metadata; check authentication, ownership, ApiKey permissions and server capability.", err=True)
+        raise typer.Exit(code=1)
+    if as_json:
+        typer.echo(json.dumps(payload, separators=(",", ":")))
+    elif operation == "revoke":
+        typer.echo(f"API-key revocation verified for {key_uuid} by stored metadata.")
+    else:
+        items = payload["result"] if operation == "list" else [payload["result"]]
+        if not items:
+            typer.echo("No API keys for the current user.")
+        for item in items:
+            typer.echo(json.dumps(item, ensure_ascii=True))
+
+
+def _validate_api_key_uuid(key_uuid: str) -> str:
+    try:
+        return SupersetClient.validate_api_key_uuid(key_uuid)
+    except ValueError:
+        raise typer.BadParameter("API key identifier must be a UUID.") from None
+
+
+@api_key_app.command("list")
+def auth_api_key_list(
+    ctx: typer.Context, instance_name: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """List current-user key metadata only; no pagination or plaintext secrets."""
+    _run_api_key_lifecycle(ctx, instance_name, state_dir, as_json, "list")
+
+
+@api_key_app.command("get")
+def auth_api_key_get(
+    ctx: typer.Context, instance_name: str, key_uuid: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """Read current-user key metadata by UUID, never the key value."""
+    key_uuid = _validate_api_key_uuid(key_uuid)
+    _run_api_key_lifecycle(ctx, instance_name, state_dir, as_json, "get", key_uuid)
+
+
+@api_key_app.command("revoke")
+def auth_api_key_revoke(
+    ctx: typer.Context, instance_name: str, key_uuid: str,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """Revoke a current-user key; successful metadata read-back is required."""
+    _require_allow_write(allow_write, action=f"revoke API key {key_uuid}")
+    key_uuid = _validate_api_key_uuid(key_uuid)
+    _run_api_key_lifecycle(ctx, instance_name, state_dir, as_json, "revoke", key_uuid)
+
+
 @cache_app.command("invalidate")
 def cache_invalidate(
     ctx: typer.Context,

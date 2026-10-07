@@ -1,6 +1,7 @@
 # Provision and verify the minimal CLI-compatible cache service role
 
 - Status: todo
+- Blocker review (2026-10-07): role/user provisioning and live invalidation require an identified deployment and separate explicit mutation authorization. Neither deployment permission IDs nor an isolated acceptance target is verified. No role or user changes were performed. Current-user lifecycle commands must not be granted to the runtime cache role. See [review plan](../../plans/2026-10-07-open-key-todos.md).
 - Priority: high
 - Type: research
 - Created by: agent

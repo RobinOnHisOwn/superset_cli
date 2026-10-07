@@ -1,6 +1,7 @@
 # Reject unapproved cache dataset targets before authentication
 
 - Status: todo
+- Blocker review (2026-10-07): this repository contains the reusable CLI, not the identified automation caller. No caller repository, policy owner or approved instance-to-dataset mapping was supplied. Preserve existing CLI defaults; implement in the owning caller after those facts are verified. See [review plan](../../plans/2026-10-07-open-key-todos.md).
 - Priority: high
 - Type: code
 - Created by: agent

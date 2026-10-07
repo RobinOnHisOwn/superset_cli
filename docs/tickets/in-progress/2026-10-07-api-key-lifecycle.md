@@ -1,11 +1,13 @@
 # Add guarded API-key lifecycle commands
 
-- Status: todo
+- Status: in-progress
+- Progress (2026-10-07): current-user list/get/revoke implemented with metadata-only output, UUID validation, pre-auth write guard, CSRF, stored-state verification and no mutation replay. See [implementation plan](../../plans/2026-10-07-open-key-todos.md).
+- Blocked: create requires a verified secret sink and independently authenticated recovery integration; no backend or disposable authorized vault supplied. No live revocation/rejection validation performed. This ticket is not complete.
 - Priority: high
 - Type: code
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [backend prerequisite](2026-10-07-service-key-provisioning-integration.md), [safe issuance](2026-10-07-secret-safe-key-issuance.md), [ADR 0009](../../decisions/0009-write-command-explicit-opt-in.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md), `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+- Related: [backend prerequisite](../todo/2026-10-07-service-key-provisioning-integration.md), [safe issuance](../todo/2026-10-07-secret-safe-key-issuance.md), [ADR 0009](../../decisions/0009-write-command-explicit-opt-in.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md), `src/superset_cli/cli.py`, `src/superset_cli/client.py`
 
 ## Context
 
@@ -30,14 +32,14 @@ Reuse `_client`, `_require_allow_write`, and shared CSRF transport. Never retry 
 
 ## Definition of done
 
-- [ ] Approve command names and human/JSON contracts; preserve local set/clear semantics. Write an implementation plan and failing tests first.
-- [ ] Implement current-user list/get metadata and guarded revoke using verified endpoint schemas and permission names. Do not assume generic list pagination applies.
+- [x] Approve command names and human/JSON contracts; preserve local set/clear semantics. Write an implementation plan and failing tests first.
+- [x] Implement current-user list/get metadata and guarded revoke using verified endpoint schemas and permission names. Do not assume generic list pagination applies.
 - [ ] Require literal `--allow-write` before credential loading/network access for create/revoke; include the existing dry-run help wording.
 - [ ] Ship create only with the safe-issuance ticket's verified sink/recovery workflow. Human and JSON output must never contain plaintext keys.
-- [ ] Do not add `--user` targeting to native endpoints. Cross-user support remains blocked on the authorized backend integration.
+- [x] Do not add `--user` targeting to native endpoints. Cross-user support remains blocked on the authorized backend integration.
 - [ ] Test current-user scope, foreign/missing UUIDs, malformed create/expiry, missing opt-in, 401/403/404/500, failed manager revocation, lost responses, self-revocation, and no mutation replay.
 - [ ] Verify effective revocation; report ambiguous or unverifiable results as non-success. Metadata discovery must not emit credentials or hashes.
-- [ ] Update README/help and architecture mapping; run focused tests, full suite, help under color/no-color, manual mock smoke checks, and build.
+- [x] Update README/help and architecture mapping; run focused tests, full suite, help under color/no-color, manual mock smoke checks, and build.
 
 ## Sources
 

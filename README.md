@@ -200,7 +200,7 @@ superset-cli auth api-key clear prod --json
 
 `set` verifies a read-only `/api/v1/me/` request before saving the binding. Use
 `--prefix` if the server's configured prefix differs from `sst_`. The CLI does not
-issue/revoke keys, enable server flags, or upgrade server dependencies. Unsupported
+issue keys, enable server flags, or upgrade server dependencies. Unsupported
 or rejected authentication fails without saving a binding or browser/JWT fallback.
 Keys are reread from the environment per invocation and never saved in auth files.
 HTTPS is required except loopback HTTP development; redirects and embedded URL
@@ -210,6 +210,39 @@ credential availability, not current server acceptance. `clear` returns to cooki
 mode without deleting cookie/JWT files. Selecting API-key mode replaces prior auth
 bindings; clearing it does not restore JWT credential bindings or the previous mode.
 Reconfigure JWT explicitly when switching back. API keys cannot be exported to Playwright.
+
+### Current-user API-key lifecycle
+
+```bash
+superset-cli auth api-key list prod --json
+superset-cli auth api-key get prod 12345678-1234-4234-8234-123456789abc --json
+superset-cli auth api-key revoke prod 12345678-1234-4234-8234-123456789abc --allow-write --json
+```
+
+Native FAB endpoints operate only on the authenticated user's keys; no `--user`
+option. They require enabled/initialized key support and `can_list`, `can_get`,
+or `can_revoke` on `ApiKey`, respectively. Revoke also requires `can_get` for
+preflight/read-back and the existing CSRF permission. Use a separate authorized
+credential belonging to the same user when revoking a key. Do not grant key
+management to the minimal cache runtime role.
+
+List has no pagination. JSON is `{"result": [...]}` for list and
+`{"result": {...}}` for get/revoke, containing only native metadata: UUID, name,
+prefix, scopes, active flag and creation/expiry/revocation/last-use timestamps.
+Plaintext keys, hashes and unexpected fields are excluded. `active` alone is not
+a guarantee of validity; stored scopes are not dataset isolation. Human reads
+show the same metadata; revoke reports verification.
+
+Revoke requires literal `--allow-write` before credential/network access. HTTP
+200 alone is insufficient: success requires matching UUID read-back with
+`active=false` and a valid `revoked_on` timestamp. This confirms stored state,
+not a separately tested live request rejection. Timeouts, failed read-back
+(including self-revocation), or missing evidence exit non-zero as **unverified**.
+Reconcile using an independent authorized credential before retrying; the key
+may already be revoked. Mutations are never replayed. Creation remains blocked
+on verified secret-safe delivery and compensating revocation; no plaintext
+issuance or guessed cross-user integration is exposed. Local `set`/`clear`
+binding behavior is unchanged.
 
 ## Resource list controls
 

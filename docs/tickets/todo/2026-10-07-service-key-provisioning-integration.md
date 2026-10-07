@@ -1,11 +1,12 @@
 # Select an authorized service-account key provisioning integration
 
 - Status: todo
+- Blocker review (2026-10-07): no owning backend repository or deployed authorized cross-user interface was supplied. Native FAB remains current-user only; selecting a fictitious integration would violate the prerequisites. Supply the backend repository and its authorization/reconciliation contract before implementation. See [review plan](../../plans/2026-10-07-open-key-todos.md).
 - Priority: high
 - Type: research
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [research plan](../../plans/2026-10-07-api-key-lifecycle-ticket-research.md), [lifecycle](2026-10-07-api-key-lifecycle.md), [safe issuance](2026-10-07-secret-safe-key-issuance.md), [service role](2026-10-07-minimal-cache-service-role.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
+- Related: [research plan](../../plans/2026-10-07-api-key-lifecycle-ticket-research.md), [lifecycle](../in-progress/2026-10-07-api-key-lifecycle.md), [safe issuance](2026-10-07-secret-safe-key-issuance.md), [service role](2026-10-07-minimal-cache-service-role.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
 
 ## Context
 

@@ -63,6 +63,17 @@ HTTPS/redirect safety, existing CSRF, and no cookie/JWT recovery for that mode.
 read. Tests: `tests/test_api_key_auth.py`. Verified version/configuration limits:
 [ADR 0023](../decisions/0023-environment-bound-api-keys.md).
 
+### Current-user key lifecycle
+
+`auth api-key list/get/revoke` maps to `auth_api_key_list/get/revoke` and shared
+`_run_api_key_lifecycle` in `cli.py`, then `SupersetClient.list_api_keys`,
+`get_api_key`, `revoke_api_key`. Native list has no pagination. UUID validation
+and the revoke write guard precede credential access. Client metadata projection
+excludes extra fields; revoke preflights get, uses shared DELETE/CSRF once, and
+checks matching inactive/revoked metadata on read-back. Unverifiable outcomes
+exit non-zero without forwarding server diagnostics. No create or cross-user
+provisioning path exists. Tests: `tests/test_api_key_lifecycle.py`.
+
 ## Cache control entry points
 
 `charts data --force` uses `charts_data` and `SupersetClient.get_chart_data(force=True)`;

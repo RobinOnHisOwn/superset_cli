@@ -1,11 +1,12 @@
 # Deliver newly issued keys directly to 1Password with failure revocation
 
 - Status: todo
+- Blocker review (2026-10-07): backend independent revocation/reconciliation remains unknown; no verified destination account/vault or authorized disposable end-to-end test was supplied. Do not issue a key until these prerequisites are verified. Metadata/revoke CLI work does not establish a cross-user recovery integration. See [review plan](../../plans/2026-10-07-open-key-todos.md).
 - Priority: high
 - Type: code
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [backend integration](2026-10-07-service-key-provisioning-integration.md), [lifecycle](2026-10-07-api-key-lifecycle.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md), [research plan](../../plans/2026-10-07-api-key-lifecycle-ticket-research.md)
+- Related: [backend integration](2026-10-07-service-key-provisioning-integration.md), [lifecycle](../in-progress/2026-10-07-api-key-lifecycle.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md), [research plan](../../plans/2026-10-07-api-key-lifecycle-ticket-research.md)
 
 ## Context
 
