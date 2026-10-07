@@ -1,9 +1,24 @@
 from pathlib import Path
+import re
 
 import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_workflows_pin_a_shared_exact_uv_version() -> None:
+    versions = []
+    for path in (REPO_ROOT / ".github/workflows").glob("*.yml"):
+        workflow = yaml.safe_load(path.read_text())
+        for job in workflow["jobs"].values():
+            for step in job["steps"]:
+                if step.get("uses", "").startswith("astral-sh/setup-uv@"):
+                    version = step.get("with", {}).get("version", "")
+                    assert isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version), path
+                    versions.append(version)
+    assert versions, "Expected at least one setup-uv installation"
+    assert len(set(versions)) == 1, "CI and release builds must use the same uv version"
 
 
 def test_envrc_configures_direnv_for_devenv() -> None:

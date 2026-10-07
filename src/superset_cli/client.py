@@ -2,6 +2,8 @@ import copy
 import json
 import re
 from contextvars import ContextVar
+from datetime import datetime
+from uuid import UUID
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -819,6 +821,58 @@ class SupersetClient:
 
     def get_openapi_spec(self) -> dict:
         return self._get("/api/v1/_openapi")
+
+    @staticmethod
+    def validate_api_key_uuid(key_uuid: str) -> str:
+        try:
+            return str(UUID(key_uuid))
+        except (ValueError, AttributeError, TypeError):
+            raise ValueError("API key identifier must be a UUID.") from None
+
+    @staticmethod
+    def _api_key_metadata(item: dict) -> dict:
+        fields = {"uuid", "name", "key_prefix", "scopes", "active", "created_on",
+                  "expires_on", "revoked_on", "last_used_on"}
+        if not isinstance(item, dict) or any(
+            value is not None and type(value) not in (str, bool)
+            for key, value in item.items() if key in fields
+        ):
+            raise ValueError("Unsupported API-key metadata response.")
+        return {key: value for key, value in item.items() if key in fields}
+
+    def list_api_keys(self) -> dict:
+        payload = self._get("/api/v1/security/api_keys/")
+        if not isinstance(payload, dict) or not isinstance(payload.get("result"), list):
+            raise ValueError("Unsupported API-key list response.")
+        return {"result": [self._api_key_metadata(item) for item in payload["result"]]}
+
+    def get_api_key(self, key_uuid: str) -> dict:
+        key_uuid = self.validate_api_key_uuid(key_uuid)
+        payload = self._get(f"/api/v1/security/api_keys/{key_uuid}")
+        if not isinstance(payload, dict):
+            raise ValueError("Unsupported API-key metadata response.")
+        item = self._api_key_metadata(payload.get("result"))
+        if item.get("uuid") != key_uuid:
+            raise ValueError("API-key metadata UUID mismatch.")
+        return {"result": item}
+
+    def revoke_api_key(self, key_uuid: str) -> dict:
+        key_uuid = self.validate_api_key_uuid(key_uuid)
+        # Preflight ownership/read permission before a non-replayable mutation.
+        self.get_api_key(key_uuid)
+        try:
+            self._delete(f"/api/v1/security/api_keys/{key_uuid}")
+            payload = self.get_api_key(key_uuid)
+            item = payload["result"]
+            if item.get("active") is not False or not item.get("revoked_on"):
+                raise ValueError("Missing revocation evidence.")
+            datetime.fromisoformat(item["revoked_on"])
+        except (AuthExpiredError, NotFoundError, httpx.HTTPError, ValueError, TypeError):
+            raise ValueError(
+                f"API-key revocation unverified for {key_uuid}; reconcile with an independent "
+                "authorized credential before retrying. The key may already be revoked."
+            ) from None
+        return payload
 
     # ----- write methods (require CLI --allow-write per ADR 0009/0010) -----
 
