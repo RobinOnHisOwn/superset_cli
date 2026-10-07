@@ -1,6 +1,7 @@
 # Force fresh chart results from the CLI
 
-- Status: todo
+- Status: done
+- Implemented 2026-10-07: GET force=true and copied-context POST boolean force, requiring --allow-write before access; defaults/output stay unchanged. ADR 0024 and README document query-specific replacement, not dataset-wide eviction. Cache/override/output focused tests: 90 passed; full suite passes. Live fresh-result acceptance not performed or claimed. Historical checklist below records the original scope.
 - Priority: high
 - Type: code
 - Created by: agent

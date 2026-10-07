@@ -1,6 +1,7 @@
 # Expose chart-result cache diagnostics
 
-- Status: todo
+- Status: done
+- Implemented 2026-10-07: opt-in human --cache-info using existing response; absent/null/false/zero/disabled metadata remain distinct, multi-query and exit behavior tested, JSON/CSV unchanged. ADR 0024; focused tests: 90 passed, full suite passes. Historical checklist below records the original scope.
 - Priority: medium
 - Type: code
 - Created by: agent
