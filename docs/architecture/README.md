@@ -35,9 +35,42 @@ Typical command flow:
 2. Typer command registration and command implementations live in `src/superset_cli/cli.py`.
 3. `src/superset_cli/instance_selection.py` resolves omitted instances before native argument parsing; handlers load configuration through `src/superset_cli/config.py`.
 4. Cookie login uses `src/superset_cli/auth.py` and `browser-cookie3`, validating candidate state through the current-user API. JWT login/refresh uses `src/superset_cli/jwt_auth.py` with environment-only credentials and separate private token state.
-5. API-backed handlers select browser or JWT state per instance, then construct `src/superset_cli/client.py`'s authenticated client.
+5. API-backed handlers select cookie/JWT state or an environment-bound API key per instance through `cli.py::_client`, then construct the authenticated `SupersetClient`.
 6. `SupersetClient` sends REST requests, fetching and caching Superset's CSRF token before writes, and returns JSON payloads.
 7. `cli.py` formats those payloads for human-readable output or emits compact `--json` output.
+
+## Resource list controls
+
+All 15 resource/security list callbacks expose `--filter`, `--columns`, and `--all`.
+CLI callbacks validate JSON/field syntax and conflicting page options before
+access. `client.py::build_list_params` composes typed filters with search and
+server-side projection. Every list method delegates to `_list_resource`, which
+checks `_info` filter capabilities separately from list column/order metadata,
+then runs ordinary or checked all-page reads. The all-page envelope is
+`{count, ids, result}`; no partial aggregate is emitted on failure. Projection
+uses server identity metadata without adding fields; `_print_list_projection`
+handles human projected rows. Tests: `tests/test_list_controls.py`. Policy and
+snapshot limitations: [ADR 0022](../decisions/0022-explicit-list-query-controls.md).
+
+## API-key authentication entry point
+
+`auth api-key set/clear` manages only environment bindings. `api_key_auth.py`
+reads and validates the key without persisting it. `cli.py::_client` is the shared
+factory for every API-backed handler and selects explicit instance auth settings;
+API-key mode skips saved browser/JWT files. `SupersetClient` applies Bearer auth,
+HTTPS/redirect safety, existing CSRF, and no cookie/JWT recovery for that mode.
+`auth status` reports local availability; `auth validate` performs the acceptance
+read. Tests: `tests/test_api_key_auth.py`. Verified version/configuration limits:
+[ADR 0023](../decisions/0023-environment-bound-api-keys.md).
+
+## HTTP timeout entry point
+
+The root `--timeout` option is validated in `cli.py` before command execution.
+It sets the context-local `client.py::HTTP_TIMEOUT` and resets it on invocation
+close. `SupersetClient` uses that value for all requests, including auth recovery
+and CSRF acquisition; direct JWT login/refresh clients receive it explicitly.
+`tests/test_timeout.py` covers request metadata, validation, invocation isolation,
+write guards, and unknown mutation outcomes. See [ADR 0021](../decisions/0021-per-invocation-http-timeout.md).
 
 ## Instance/auth entry points
 
@@ -57,7 +90,8 @@ Typical command flow:
 - `src/superset_cli/auth.py` — browser-state paths/inspection, installed-browser cookie import, explicit private Playwright export
 - `src/superset_cli/jwt_auth.py` — DB/LDAP login/refresh, private separate token state, display-only expiry metadata
 - `src/superset_cli/instance_selection.py` — default precedence and Typer command arity adapter
-- `src/superset_cli/client.py` — cookie/JWT auth selection, bounded GET-only JWT refresh, CSRF-protected API access
+- `src/superset_cli/client.py` — cookie/JWT/API-key transport, bounded GET-only JWT refresh, CSRF-protected API access, checked list traversal
+- `src/superset_cli/api_key_auth.py` — environment-only API-key validation; no state file or key-management API
 - `scripts/verify_dashboard.py` — optional Playwright rendered-content/tab/screenshot verification (not part of core dependencies)
 - `tests/` — pytest coverage grouped by command area and helper module
 - `docs/plans/` — plans and temporary implementation reasoning

@@ -3,6 +3,7 @@ import io
 import os
 from contextvars import ContextVar
 import json
+import math
 import zipfile
 from importlib.metadata import version as package_version
 from datetime import datetime, timezone
@@ -14,9 +15,10 @@ import httpx
 import typer
 
 from superset_cli.auth import DEFAULT_BROWSER, SUPPORTED_BROWSERS, NoCookiesFoundError, export_playwright_state, format_expiry, get_auth_status, get_instance_dir, get_storage_state_path, import_browser_cookies, remove_auth_state
-from superset_cli.client import AuthExpiredError, NotFoundError, SupersetClient, format_api_error
+from superset_cli.client import HTTP_TIMEOUT, AuthExpiredError, NotFoundError, SupersetClient, format_api_error, parse_list_filters, validate_list_columns
 from superset_cli.config import DEFAULT_STATE_DIR, get_instance, load_config, remove_instance, save_config, upsert_instance
-from superset_cli.models import InstanceConfig, AuthConfig, JWTSettings
+from superset_cli.models import InstanceConfig, AuthConfig, JWTSettings, APIKeySettings
+from superset_cli.api_key_auth import read_api_key
 from superset_cli.jwt_auth import jwt_status, login_jwt, refresh_jwt
 from superset_cli.instance_selection import InstanceTyper, resolve_instance_name
 
@@ -81,6 +83,50 @@ app.add_typer(explore_app, name="explore")
 app.add_typer(import_app, name="import")
 
 
+def _validate_list_filters(value):
+    try:
+        return parse_list_filters(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _validate_list_columns(value):
+    try:
+        return validate_list_columns(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _validate_list_page(ctx: typer.Context, value):
+    if value is not None and ctx.params.get("all_pages"):
+        raise typer.BadParameter("--all cannot be combined with --page.")
+    return value
+
+
+def _validate_list_all(ctx: typer.Context, value):
+    if value and ctx.params.get("page") is not None:
+        raise typer.BadParameter("--all cannot be combined with --page.")
+    return value
+
+
+_LIST_FILTER_OPT = typer.Option("--filter", callback=_validate_list_filters, help='Repeat a JSON filter object with col, opr, and typed value. Not chart-data col=value syntax.')
+_LIST_COLUMNS_OPT = typer.Option("--columns", callback=_validate_list_columns, help="Select a field on the server; repeat once per field.")
+_LIST_ALL_OPT = typer.Option("--all", callback=_validate_list_all, help="Fetch every page, checking identities and counts. Not an atomic snapshot; incompatible with --page.")
+
+
+def _list_options(filters, columns, all_pages, **query):
+    options = {key: value for key, value in (("filters", filters), ("columns", columns), ("all_pages", all_pages)) if value}
+    return {**options, **{key: value for key, value in query.items() if value is not None}}
+
+
+def _print_list_projection(payload, columns, as_json):
+    if not columns or as_json:
+        return False
+    for row in payload.get("result", []):
+        typer.echo(json.dumps(row, separators=(",", ":")))
+    return True
+
+
 def _show_version(value: bool) -> bool:
     if value:
         typer.echo(f"superset-cli {package_version('superset-cli')}")
@@ -97,7 +143,12 @@ def main(
     ] = None,
     show_version: Annotated[bool, typer.Option("--version", callback=_show_version, is_eager=True, help="Show the running package version.")] = False,
     instance_override: Annotated[str | None, typer.Option("--instance", help="Instance when the subcommand omits its positional instance.")] = None,
+    timeout: Annotated[float, typer.Option("--timeout", help="HTTP phase/inactivity timeout in seconds (not a total deadline). Must be finite and positive.")] = 30.0,
 ) -> None:
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise typer.BadParameter("Must be a finite positive number of seconds.", param_hint="--timeout")
+    timeout_token = HTTP_TIMEOUT.set(timeout)
+    ctx.call_on_close(lambda: HTTP_TIMEOUT.reset(timeout_token))
     ctx.obj = {"config_path": config_path, "instance_override": instance_override}
     token = _ACTIVE_INSTANCE.set(None)
     ctx.call_on_close(lambda: _ACTIVE_INSTANCE.reset(token))
@@ -129,8 +180,17 @@ def _api_errors() -> Generator[None, None, None]:
     except NotFoundError as exc:
         typer.echo(str(exc))
         raise typer.Exit(code=1)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
     except httpx.HTTPStatusError as exc:
         typer.echo(format_api_error(exc), err=True)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException as exc:
+        message = "HTTP request timed out."
+        if exc.request.method not in {"GET", "HEAD", "OPTIONS"}:
+            message += " Mutation outcome unknown; check server state before retrying."
+        typer.echo(message, err=True)
         raise typer.Exit(code=1)
     except httpx.RequestError as exc:
         typer.echo(f"Network error: could not reach Superset ({exc})")
@@ -161,8 +221,18 @@ def diff_dashboard_records(a: dict, b: dict) -> list[tuple[str, str, str]]:
     return diffs
 
 
-def _require_storage_state(*, instance_name: str, state_dir: Path) -> Path:
+def _client(*, instance: InstanceConfig, storage_state_path: Path | None):
+    if instance.auth and instance.auth.mode == "api_key":
+        if instance.auth.api_key is None:
+            raise ValueError("API-key mode requires an environment binding; run 'auth api-key set'.")
+        return SupersetClient(base_url=instance.base_url, api_key=instance.auth.api_key)
+    return SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path)
+
+
+def _require_storage_state(*, instance_name: str, state_dir: Path) -> Path | None:
     instance = _ACTIVE_INSTANCE.get()
+    if instance is not None and instance.name == instance_name and instance.auth and instance.auth.mode == "api_key":
+        return None
     jwt = instance is not None and instance.name == instance_name and instance.auth is not None and instance.auth.mode == "jwt"
     storage_state_path = (get_instance_dir(state_dir=state_dir, instance_name=instance_name) / "jwt-state.json"
                           if jwt else get_storage_state_path(state_dir=state_dir, instance_name=instance_name))
@@ -289,10 +359,13 @@ def auth_login(
     ] = DEFAULT_BROWSER,
 ) -> None:
     instance = _require_instance(ctx, instance_name)
+    if instance.auth and instance.auth.mode == "api_key":
+        typer.echo("API-key mode does not import browser cookies. Use 'auth api-key set' or 'auth api-key clear'.", err=True)
+        raise typer.Exit(code=1)
     storage_state_path = get_storage_state_path(state_dir=state_dir, instance_name=instance_name)
 
     def validate_imported_state(path: Path) -> bool:
-        client = SupersetClient(base_url=instance.base_url, storage_state_path=path)
+        client = _client(instance=instance, storage_state_path=path)
         try:
             client.get_current_user()
             return True
@@ -346,7 +419,10 @@ def auth_logout(
     ] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, typer.Option("--json", help="Return structured JSON output.")] = False,
 ) -> None:
-    _require_instance(ctx, instance_name)
+    instance = _require_instance(ctx, instance_name)
+    if instance.auth and instance.auth.mode == "api_key":
+        typer.echo("Use 'auth api-key clear' to remove the binding; server-side key revocation is separate.", err=True)
+        raise typer.Exit(code=1)
     instance_dir = get_instance_dir(state_dir=state_dir, instance_name=instance_name)
     if not instance_dir.exists():
         typer.echo(f"No saved auth state for instance '{instance_name}'. Nothing to remove.")
@@ -382,7 +458,7 @@ def auth_jwt_login(
     path = get_instance_dir(state_dir=state_dir, instance_name=instance_name) / "jwt-state.json"
     try:
         with _api_errors():
-            login_jwt(instance.base_url, path, username=username, password=password, provider=settings.provider)
+            login_jwt(instance.base_url, path, username=username, password=password, provider=settings.provider, timeout=HTTP_TIMEOUT.get())
         config = load_config(_get_config_path(ctx))
         instance.auth = AuthConfig(mode="jwt", jwt=settings)
         save_config(upsert_instance(config, instance), _get_config_path(ctx))
@@ -402,7 +478,7 @@ def auth_jwt_refresh(
     path = get_instance_dir(state_dir=state_dir, instance_name=instance_name) / "jwt-state.json"
     try:
         with _api_errors():
-            with httpx.Client(base_url=instance.base_url, follow_redirects=False, timeout=30) as http:
+            with httpx.Client(base_url=instance.base_url, follow_redirects=False, timeout=HTTP_TIMEOUT.get()) as http:
                 refresh_jwt(http, path)
     except (ValueError, OSError):
         typer.echo("JWT refresh failed; run 'auth jwt login'.", err=True)
@@ -434,12 +510,56 @@ def auth_export_playwright(
 ) -> None:
     _require_instance(ctx, instance_name)
     source = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+    if source is None:
+        typer.echo("API-key mode has no browser state to export.", err=True)
+        raise typer.Exit(code=1)
     try:
         export_playwright_state(source, output, expiry_unit=expiry_unit)
     except (ValueError, OSError):
         typer.echo("Could not export browser state. Check input fields, --expiry-unit, and that --output is a new writable path.", err=True)
         raise typer.Exit(code=1)
     typer.echo(f"Exported private browser state to {output}.")
+
+
+api_key_app = InstanceTyper(help="Environment-only API keys for verified compatible server deployments.")
+auth_app.add_typer(api_key_app, name="api-key")
+
+
+@api_key_app.command("set")
+def auth_api_key_set(
+    ctx: typer.Context, instance_name: str,
+    env: Annotated[str, typer.Option("--env", help="Environment variable name, never the key value.")],
+    prefix: Annotated[str, typer.Option("--prefix", help="Server's configured API-key prefix.")] = "sst_",
+    state_dir: Annotated[Path, typer.Option("--state-dir")] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    instance = _require_instance(ctx, instance_name)
+    try:
+        settings = APIKeySettings(env=env, prefix=prefix)
+    except ValueError as exc:
+        raise typer.BadParameter("Invalid environment variable name or key prefix.") from exc
+    with _api_errors():
+        with SupersetClient(base_url=instance.base_url, api_key=settings) as client:
+            client.request("GET", "/api/v1/me/")
+    instance.auth = AuthConfig(mode="api_key", api_key=settings)
+    config = load_config(_get_config_path(ctx))
+    save_config(upsert_instance(config, instance), _get_config_path(ctx))
+    typer.echo(json.dumps({"mode": "api_key", **settings.model_dump()}) if as_json else "Saved validated API-key environment binding; no credential was stored.")
+
+
+@api_key_app.command("clear")
+def auth_api_key_clear(
+    ctx: typer.Context, instance_name: str,
+    state_dir: Annotated[Path, typer.Option("--state-dir")] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    instance = _require_instance(ctx, instance_name)
+    if instance.auth and instance.auth.mode == "api_key":
+        instance.auth = None
+        config = load_config(_get_config_path(ctx))
+        save_config(upsert_instance(config, instance), _get_config_path(ctx))
+    mode = instance.auth.mode if instance.auth else "cookie"
+    typer.echo(json.dumps({"mode": mode}) if as_json else f"No API-key binding remains; selected mode: {mode}. Saved browser/JWT state was preserved.")
 
 
 @auth_app.command("status")
@@ -453,6 +573,15 @@ def auth_status(
     as_json: Annotated[bool, typer.Option("--json", help="Return structured JSON output.")] = False,
 ) -> None:
     instance = _require_instance(ctx, instance_name)
+    if instance.auth and instance.auth.mode == "api_key":
+        settings = instance.auth.api_key
+        try:
+            available = settings is not None and bool(read_api_key(settings))
+        except ValueError:
+            available = False
+        payload = {"instance": instance.name, "base_url": instance.base_url, "mode": "api_key", "credential_available": available}
+        typer.echo(json.dumps(payload) if as_json else f"API-key credential available: {available}; run 'auth validate' to verify server acceptance.")
+        return
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     payload = {
         "instance": instance.name,
@@ -488,7 +617,7 @@ def auth_validate(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             user = client.get_current_user()
     payload = {
         "instance": instance.name,
@@ -517,7 +646,7 @@ def openapi_fetch(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_openapi_spec()
 
     if as_json:
@@ -543,7 +672,7 @@ def me_show(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             user = client.get_current_user()
 
     if as_json:
@@ -568,7 +697,7 @@ def me_roles(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_current_user_roles()
 
     if as_json:
@@ -587,13 +716,16 @@ def me_roles(
 def dashboards_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[
         Path,
         typer.Option("--state-dir", help="Directory for saved auth state."),
     ] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, typer.Option("--json", help="Return structured JSON output.")] = False,
-    page: Annotated[int | None, typer.Option("--page", help="Page index (0-based).")] = None,
-    page_size: Annotated[int | None, typer.Option("--page-size", help="Number of results per page.")] = None,
+    page: Annotated[int | None, typer.Option("--page", min=0, callback=_validate_list_page, help="Page index (0-based).")] = None,
+    page_size: Annotated[int | None, typer.Option("--page-size", min=1, help="Number of results per page.")] = None,
     search: Annotated[str | None, typer.Option("--search", help="Filter results by dashboard title using Superset contains matching.")] = None,
     order_column: Annotated[str | None, typer.Option("--order-column", help="Superset list field to order by.")] = None,
     order_direction: Annotated[str | None, typer.Option("--order-direction", help="Sort direction: asc or desc.")] = None,
@@ -601,8 +733,9 @@ def dashboards_list(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.list_dashboards(
+                **_list_options(filters, columns, all_pages),
                 page=page,
                 page_size=page_size,
                 search=search,
@@ -614,6 +747,8 @@ def dashboards_list(
         typer.echo(json.dumps(payload, separators=(",", ":")))
         return
 
+    if _print_list_projection(payload, columns, as_json):
+        return
     dashboards = payload.get("result", [])
     if not dashboards:
         typer.echo("No dashboards found.")
@@ -640,7 +775,7 @@ def dashboards_get(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_dashboard(id_or_slug)
 
     if as_json:
@@ -669,7 +804,7 @@ def dashboards_diff(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             a = client.get_dashboard(id_or_slug_a)
             b = client.get_dashboard(id_or_slug_b)
     diffs = diff_dashboard_records(a, b)
@@ -701,7 +836,7 @@ def dashboards_charts(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_dashboard_charts(id_or_slug)
 
     if as_json:
@@ -733,7 +868,7 @@ def dashboards_datasets(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_dashboard_datasets(id_or_slug)
 
     if as_json:
@@ -755,13 +890,16 @@ def dashboards_datasets(
 def charts_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[
         Path,
         typer.Option("--state-dir", help="Directory for saved auth state."),
     ] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, typer.Option("--json", help="Return structured JSON output.")] = False,
-    page: Annotated[int | None, typer.Option("--page", help="Page index (0-based).")] = None,
-    page_size: Annotated[int | None, typer.Option("--page-size", help="Number of results per page.")] = None,
+    page: Annotated[int | None, typer.Option("--page", min=0, callback=_validate_list_page, help="Page index (0-based).")] = None,
+    page_size: Annotated[int | None, typer.Option("--page-size", min=1, help="Number of results per page.")] = None,
     search: Annotated[str | None, typer.Option("--search", help="Filter results by chart name using Superset contains matching.")] = None,
     order_column: Annotated[str | None, typer.Option("--order-column", help="Superset list field to order by.")] = None,
     order_direction: Annotated[str | None, typer.Option("--order-direction", help="Sort direction: asc or desc.")] = None,
@@ -769,8 +907,9 @@ def charts_list(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.list_charts(
+                **_list_options(filters, columns, all_pages),
                 page=page,
                 page_size=page_size,
                 search=search,
@@ -782,6 +921,8 @@ def charts_list(
         typer.echo(json.dumps(payload, separators=(",", ":")))
         return
 
+    if _print_list_projection(payload, columns, as_json):
+        return
     charts = payload.get("result", [])
     if not charts:
         typer.echo("No charts found.")
@@ -808,7 +949,7 @@ def charts_get(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_chart(id_or_uuid)
 
     if as_json:
@@ -824,13 +965,16 @@ def charts_get(
 def datasets_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[
         Path,
         typer.Option("--state-dir", help="Directory for saved auth state."),
     ] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, typer.Option("--json", help="Return structured JSON output.")] = False,
-    page: Annotated[int | None, typer.Option("--page", help="Page index (0-based).")] = None,
-    page_size: Annotated[int | None, typer.Option("--page-size", help="Number of results per page.")] = None,
+    page: Annotated[int | None, typer.Option("--page", min=0, callback=_validate_list_page, help="Page index (0-based).")] = None,
+    page_size: Annotated[int | None, typer.Option("--page-size", min=1, help="Number of results per page.")] = None,
     search: Annotated[str | None, typer.Option("--search", help="Filter results by dataset table name using Superset contains matching.")] = None,
     order_column: Annotated[str | None, typer.Option("--order-column", help="Superset list field to order by.")] = None,
     order_direction: Annotated[str | None, typer.Option("--order-direction", help="Sort direction: asc or desc.")] = None,
@@ -838,8 +982,9 @@ def datasets_list(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.list_datasets(
+                **_list_options(filters, columns, all_pages),
                 page=page,
                 page_size=page_size,
                 search=search,
@@ -851,6 +996,8 @@ def datasets_list(
         typer.echo(json.dumps(payload, separators=(",", ":")))
         return
 
+    if _print_list_projection(payload, columns, as_json):
+        return
     datasets = payload.get("result", [])
     if not datasets:
         typer.echo("No datasets found.")
@@ -877,7 +1024,7 @@ def datasets_get(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_dataset(id_or_uuid)
 
     if as_json:
@@ -893,13 +1040,16 @@ def datasets_get(
 def databases_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[
         Path,
         typer.Option("--state-dir", help="Directory for saved auth state."),
     ] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, typer.Option("--json", help="Return structured JSON output.")] = False,
-    page: Annotated[int | None, typer.Option("--page", help="Page index (0-based).")] = None,
-    page_size: Annotated[int | None, typer.Option("--page-size", help="Number of results per page.")] = None,
+    page: Annotated[int | None, typer.Option("--page", min=0, callback=_validate_list_page, help="Page index (0-based).")] = None,
+    page_size: Annotated[int | None, typer.Option("--page-size", min=1, help="Number of results per page.")] = None,
     search: Annotated[str | None, typer.Option("--search", help="Filter results by database name using Superset contains matching.")] = None,
     order_column: Annotated[str | None, typer.Option("--order-column", help="Superset list field to order by.")] = None,
     order_direction: Annotated[str | None, typer.Option("--order-direction", help="Sort direction: asc or desc.")] = None,
@@ -907,8 +1057,9 @@ def databases_list(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.list_databases(
+                **_list_options(filters, columns, all_pages),
                 page=page,
                 page_size=page_size,
                 search=search,
@@ -920,6 +1071,8 @@ def databases_list(
         typer.echo(json.dumps(payload, separators=(",", ":")))
         return
 
+    if _print_list_projection(payload, columns, as_json):
+        return
     databases = payload.get("result", [])
     if not databases:
         typer.echo("No databases found.")
@@ -946,7 +1099,7 @@ def databases_get(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_database(pk)
 
     if as_json:
@@ -974,7 +1127,7 @@ def databases_schemas(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_database_schemas(pk, catalog=catalog, force=force)
 
     if as_json:
@@ -1006,7 +1159,7 @@ def databases_tables(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_database_tables(pk, schema_name=schema_name, catalog_name=catalog, force=force)
 
     if as_json:
@@ -1031,14 +1184,17 @@ def _run_list(
     as_json: bool,
     empty_message: str,
     line_formatter,
+    columns: list[str] | None = None,
 ) -> None:
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = list_call(client)
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
+        return
+    if _print_list_projection(payload, columns, as_json):
         return
     items = payload.get("result", [])
     if not items:
@@ -1060,7 +1216,7 @@ def _run_get(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = get_call(client)
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
@@ -1071,8 +1227,8 @@ def _run_get(
 
 _STATE_DIR_OPT = typer.Option("--state-dir", help="Directory for saved auth state.")
 _JSON_OPT = typer.Option("--json", help="Return structured JSON output.")
-_PAGE_OPT = typer.Option("--page", help="Page index (0-based).")
-_PAGE_SIZE_OPT = typer.Option("--page-size", help="Number of results per page.")
+_PAGE_OPT = typer.Option("--page", min=0, callback=_validate_list_page, help="Page index (0-based).")
+_PAGE_SIZE_OPT = typer.Option("--page-size", min=1, help="Number of results per page.")
 _ORDER_COL_OPT = typer.Option("--order-column", help="Superset list field to order by.")
 _ORDER_DIR_OPT = typer.Option("--order-direction", help="Sort direction: asc or desc.")
 
@@ -1097,7 +1253,7 @@ def assets_export(
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     resource = ctx.parent.info_name[:-1]
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             content, content_type, _ = client.export_assets(resource, ids)
     media_type = content_type.split(";", 1)[0].strip().lower()
     if media_type not in {"application/zip", "application/octet-stream", "application/x-zip-compressed"} or not zipfile.is_zipfile(io.BytesIO(content)):
@@ -1115,12 +1271,20 @@ def assets_export(
 @roles_app.command("list")
 def security_roles_list(
     ctx: typer.Context, instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
+    page: Annotated[int | None, _PAGE_OPT] = None,
+    page_size: Annotated[int | None, _PAGE_SIZE_OPT] = None,
+    order_column: Annotated[str | None, _ORDER_COL_OPT] = None,
+    order_direction: Annotated[str | None, _ORDER_DIR_OPT] = None,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     search: Annotated[str | None, typer.Option("--search")] = None,
 ) -> None:
     _run_list(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
-              list_call=lambda c: c.list_roles(search=search), empty_message="No roles found.",
+              columns=columns,
+              list_call=lambda c: c.list_roles(search=search, **_list_options(filters, columns, all_pages, page=page, page_size=page_size, order_column=order_column, order_direction=order_direction)), empty_message="No roles found.",
               line_formatter=lambda x: f"{x.get('id')}: {x.get('name')}")
 
 
@@ -1137,12 +1301,20 @@ def security_roles_get(
 @users_app.command("list")
 def security_users_list(
     ctx: typer.Context, instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
+    page: Annotated[int | None, _PAGE_OPT] = None,
+    page_size: Annotated[int | None, _PAGE_SIZE_OPT] = None,
+    order_column: Annotated[str | None, _ORDER_COL_OPT] = None,
+    order_direction: Annotated[str | None, _ORDER_DIR_OPT] = None,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     search: Annotated[str | None, typer.Option("--search")] = None,
 ) -> None:
     _run_list(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
-              list_call=lambda c: c.list_users(search=search), empty_message="No users found.",
+              columns=columns,
+              list_call=lambda c: c.list_users(search=search, **_list_options(filters, columns, all_pages, page=page, page_size=page_size, order_column=order_column, order_direction=order_direction)), empty_message="No users found.",
               line_formatter=lambda x: f"{x.get('id')}: {x.get('username')}")
 
 
@@ -1159,11 +1331,19 @@ def security_users_get(
 @rls_app.command("list")
 def security_rls_list(
     ctx: typer.Context, instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
+    page: Annotated[int | None, _PAGE_OPT] = None,
+    page_size: Annotated[int | None, _PAGE_SIZE_OPT] = None,
+    order_column: Annotated[str | None, _ORDER_COL_OPT] = None,
+    order_direction: Annotated[str | None, _ORDER_DIR_OPT] = None,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
 ) -> None:
     _run_list(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
-              list_call=lambda c: c.list_rls_rules(), empty_message="No RLS rules found.",
+              columns=columns,
+              list_call=lambda c: c.list_rls_rules(**_list_options(filters, columns, all_pages, page=page, page_size=page_size, order_column=order_column, order_direction=order_direction)), empty_message="No RLS rules found.",
               line_formatter=lambda x: f"{x.get('id')}: {x.get('name')}")
 
 
@@ -1202,6 +1382,9 @@ def explore_form_data(
 def annotation_layers_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     page: Annotated[int | None, _PAGE_OPT] = None,
@@ -1212,7 +1395,9 @@ def annotation_layers_list(
 ) -> None:
     _run_list(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        columns=columns,
         list_call=lambda c: c.list_annotation_layers(
+            **_list_options(filters, columns, all_pages),
             page=page, page_size=page_size, search=search,
             order_column=order_column, order_direction=order_direction,
         ),
@@ -1242,6 +1427,9 @@ def annotation_layers_get(
 def css_templates_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     page: Annotated[int | None, _PAGE_OPT] = None,
@@ -1252,7 +1440,9 @@ def css_templates_list(
 ) -> None:
     _run_list(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        columns=columns,
         list_call=lambda c: c.list_css_templates(
+            **_list_options(filters, columns, all_pages),
             page=page, page_size=page_size, search=search,
             order_column=order_column, order_direction=order_direction,
         ),
@@ -1281,6 +1471,9 @@ def css_templates_get(
 def themes_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     page: Annotated[int | None, _PAGE_OPT] = None,
@@ -1291,7 +1484,9 @@ def themes_list(
 ) -> None:
     _run_list(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        columns=columns,
         list_call=lambda c: c.list_themes(
+            **_list_options(filters, columns, all_pages),
             page=page, page_size=page_size, search=search,
             order_column=order_column, order_direction=order_direction,
         ),
@@ -1320,6 +1515,9 @@ def themes_get(
 def tags_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     page: Annotated[int | None, _PAGE_OPT] = None,
@@ -1330,7 +1528,9 @@ def tags_list(
 ) -> None:
     _run_list(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        columns=columns,
         list_call=lambda c: c.list_tags(
+            **_list_options(filters, columns, all_pages),
             page=page, page_size=page_size, search=search,
             order_column=order_column, order_direction=order_direction,
         ),
@@ -1360,6 +1560,9 @@ def tags_get(
 def reports_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     page: Annotated[int | None, _PAGE_OPT] = None,
@@ -1370,7 +1573,9 @@ def reports_list(
 ) -> None:
     _run_list(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        columns=columns,
         list_call=lambda c: c.list_reports(
+            **_list_options(filters, columns, all_pages),
             page=page, page_size=page_size, search=search,
             order_column=order_column, order_direction=order_direction,
         ),
@@ -1401,6 +1606,9 @@ def reports_get(
 def saved_queries_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     page: Annotated[int | None, _PAGE_OPT] = None,
@@ -1411,7 +1619,9 @@ def saved_queries_list(
 ) -> None:
     _run_list(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        columns=columns,
         list_call=lambda c: c.list_saved_queries(
+            **_list_options(filters, columns, all_pages),
             page=page, page_size=page_size, search=search,
             order_column=order_column, order_direction=order_direction,
         ),
@@ -1441,6 +1651,9 @@ def saved_queries_get(
 def queries_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     page: Annotated[int | None, _PAGE_OPT] = None,
@@ -1451,7 +1664,9 @@ def queries_list(
 ) -> None:
     _run_list(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        columns=columns,
         list_call=lambda c: c.list_queries(
+            **_list_options(filters, columns, all_pages),
             page=page, page_size=page_size, search=search,
             order_column=order_column, order_direction=order_direction,
         ),
@@ -1481,6 +1696,9 @@ def queries_get(
 def logs_list(
     ctx: typer.Context,
     instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
     state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
     as_json: Annotated[bool, _JSON_OPT] = False,
     page: Annotated[int | None, _PAGE_OPT] = None,
@@ -1490,7 +1708,9 @@ def logs_list(
 ) -> None:
     _run_list(
         instance_name=instance_name, state_dir=state_dir, ctx=ctx, as_json=as_json,
+        columns=columns,
         list_call=lambda c: c.list_logs(
+            **_list_options(filters, columns, all_pages),
             page=page, page_size=page_size,
             order_column=order_column, order_direction=order_direction,
         ),
@@ -1527,7 +1747,7 @@ def logs_recent_activity(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_recent_activity()
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
@@ -1566,7 +1786,7 @@ def datasets_related(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_dataset_related_objects(id_or_uuid)
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
@@ -1596,7 +1816,7 @@ def permalinks_resolve(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_permalink(kind, key)
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
@@ -1621,7 +1841,7 @@ def datasources_column_values(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = client.get_datasource_column_values(datasource_type, datasource_id, column)
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
@@ -1661,7 +1881,7 @@ def charts_data(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             try:
                 payload = (client.get_chart_data(pk, time_range=time_range, filters=query_filters)
                            if time_range is not None or query_filters else client.get_chart_data(pk))
@@ -1762,7 +1982,7 @@ def _run_write(
     instance = _require_instance(ctx, instance_name)
     storage_state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_state_path) as client:
+        with _client(instance=instance, storage_state_path=storage_state_path) as client:
             payload = call(client)
     if as_json:
         typer.echo(json.dumps(payload, separators=(",", ":")))
@@ -1775,7 +1995,7 @@ def _run_owner_call(ctx: typer.Context, instance_name: str, state_dir: Path, as_
     instance = _require_instance(ctx, instance_name)
     storage = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
     with _api_errors():
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage) as client:
+        with _client(instance=instance, storage_state_path=storage) as client:
             try:
                 payload = call(client, resource)
             except ValueError as exc:
@@ -1897,10 +2117,10 @@ def api_request(
     if (body is not None or file is not None) and not isinstance(payload_body, dict):
         raise typer.BadParameter("The request body must be a JSON object.")
     instance = _require_instance(ctx, instance_name)
-    if instance.auth and instance.auth.mode == "jwt":
+    if instance.auth and instance.auth.mode in {"jwt", "api_key"}:
         storage_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
         with _api_errors():
-            with SupersetClient(base_url=instance.base_url, storage_state_path=storage_path) as client:
+            with _client(instance=instance, storage_state_path=storage_path) as client:
                 client.request("GET", "/api/v1/me/")
                 payload = client.request(method, path, params=params, json_body=payload_body)
         typer.echo(json.dumps(payload, separators=(",", ":") if as_json else None, indent=None if as_json else 2))
@@ -1908,7 +2128,7 @@ def api_request(
     storage_path = get_storage_state_path(state_dir=state_dir, instance_name=instance_name)
 
     def validate(candidate: Path) -> bool:
-        with SupersetClient(base_url=instance.base_url, storage_state_path=candidate) as client:
+        with _client(instance=instance, storage_state_path=candidate) as client:
             try:
                 client.request("GET", "/api/v1/me/")
                 return True
@@ -1924,7 +2144,7 @@ def api_request(
             except NoCookiesFoundError as exc:
                 typer.echo(str(exc), err=True)
                 raise typer.Exit(code=1) from exc
-        with SupersetClient(base_url=instance.base_url, storage_state_path=storage_path) as client:
+        with _client(instance=instance, storage_state_path=storage_path) as client:
             payload = client.request(method, path, params=params, json_body=payload_body)
     typer.echo(json.dumps(payload, separators=(",", ":") if as_json else None, indent=None if as_json else 2))
 

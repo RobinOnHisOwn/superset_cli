@@ -16,6 +16,23 @@ Current scope (read by default, write opt-in):
 - shared list-query controls on all list commands via `--page` (0-based), `--page-size`, `--search`, `--order-column`, and `--order-direction`
 - user-friendly error messages for auth expiry, missing resources, and network failures (exit code 1, no raw tracebacks)
 
+## HTTP timeouts
+
+Use the root `--timeout SECONDS` option **before the command** for slow API requests:
+
+```bash
+superset-cli --timeout 90 charts data prod 7 --json
+superset-cli --timeout 90 api prod /api/v1/dashboard/
+```
+
+The default remains 30 seconds. Values must be finite and positive. The option
+applies to API requests, authentication validation/recovery, CSRF acquisition,
+and JWT login/refresh. It controls HTTPX connect/read/write/pool phase or
+inactivity timeouts, **not a total command deadline**. It is not saved in config.
+A timeout exits non-zero; a sent mutation's outcome is unknown. Check server
+state before retrying. The CLI never automatically retries a sent mutation;
+`--allow-write` is still required on every write invocation.
+
 ## Decision log
 
 Long-lived technical reasoning lives in `docs/decisions/`.
@@ -163,6 +180,72 @@ cookies automatically. JWT login/refresh/API calls require HTTPS, except HTTP
 loopback development (`localhost` or loopback IP literals); embedded URL
 credentials and malformed bearer values are rejected without echoing secrets.
 Updating an instance URL preserves its selected auth mode and bindings.
+
+## API-key authentication (capability-gated)
+
+The source-verified combination is **Superset 6.1.0 with Flask-AppBuilder 5.2.2**,
+`FAB_API_KEY_ENABLED=True`, initialized key storage, an active issued key, and a
+matching prefix. Superset's version alone does not guarantee support. No real
+API-key deployment was exercised during implementation; see [ADR 0023](docs/decisions/0023-environment-bound-api-keys.md).
+
+Provide an existing issued key through a secure environment injector, never a
+literal CLI argument or config value. Register only its environment-variable name:
+
+```bash
+superset-cli auth api-key set prod --env EXAMPLE_SUPERSET_API_KEY --json
+superset-cli auth validate prod --json
+superset-cli charts list prod --json
+superset-cli auth api-key clear prod --json
+```
+
+`set` verifies a read-only `/api/v1/me/` request before saving the binding. Use
+`--prefix` if the server's configured prefix differs from `sst_`. The CLI does not
+issue/revoke keys, enable server flags, or upgrade server dependencies. Unsupported
+or rejected authentication fails without saving a binding or browser/JWT fallback.
+Keys are reread from the environment per invocation and never saved in auth files.
+HTTPS is required except loopback HTTP development; redirects and embedded URL
+credentials are rejected. CSRF, timeouts, and per-invocation `--allow-write` remain
+required as applicable; sent mutations never replay. `auth status` reports local
+credential availability, not current server acceptance. `clear` returns to cookie
+mode without deleting cookie/JWT files. Selecting API-key mode replaces prior auth
+bindings; clearing it does not restore JWT credential bindings or the previous mode.
+Reconfigure JWT explicitly when switching back. API keys cannot be exported to Playwright.
+
+## Resource list controls
+
+All 15 resource/security lists support optional `--filter`, `--columns`, and `--all`.
+`instances list` is local, not paginated. Ordinary single-page output is unchanged.
+
+```bash
+superset-cli charts list prod --filter '{"col":"viz_type","opr":"eq","value":"table"}' --columns id --columns slice_name --json
+superset-cli logs list prod --filter '{"col":"dttm","opr":"gt","value":"2026-01-01"}' --json
+superset-cli dashboards list prod --all --page-size 100 --json
+```
+
+Repeat JSON-object filters with exactly `col`, `opr`, and `value`. Values retain
+JSON types (strings, numbers, booleans, null, arrays); filters AND together and
+append to `--search`. This is distinct from chart-data `--filter col=value`.
+Resource `_info` determines supported fields/operators; unsupported combinations
+fail rather than using a guessed universal catalog. When a resource omits `_info`
+(as Superset 6.1.0 logs do), the list endpoint validates the filter directly.
+Permission failures never trigger this fallback.
+
+Repeat `--columns FIELD` once per unique field. Resource list metadata is checked
+before requesting `q.columns` on the server. Projected human output is compact
+JSON per returned row, so omitted default fields do not produce `None` placeholders.
+Single-page `--json` preserves the server envelope.
+
+`--all` starts at page zero, rejects explicit `--page`, and requests 100 records
+per page unless `--page-size` is given. Server caps are respected. Filters,
+projection, and ordering persist across pages; ID ordering is preferred only
+when advertised, otherwise explicit/server ordering is retained. Server `ids`
+allow duplicate checks without adding an unrequested ID field to the projection.
+The aggregate JSON envelope is exactly `{count, ids, result}`. No aggregate is
+printed if a later page fails, counts change, identities duplicate, or pages stop
+early. **This is not an atomic snapshot**: non-unique ordering and concurrent
+changes can still affect completeness even when checks pass. Buffering `--all`
+uses memory proportional to the result. Capability checks add small read requests;
+legacy single-page lists without new controls add none. See [ADR 0022](docs/decisions/0022-explicit-list-query-controls.md).
 
 ## Current commands
 
