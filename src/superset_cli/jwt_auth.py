@@ -58,11 +58,11 @@ def save_jwt_state(path: Path, state: dict) -> None:
             staging.unlink(missing_ok=True)
 
 
-def login_jwt(base_url: str, path: Path, *, username: str, password: str, provider: str = "db") -> None:
+def login_jwt(base_url: str, path: Path, *, username: str, password: str, provider: str = "db", timeout: float = 30.0) -> None:
     if provider not in {"db", "ldap"} or not username or not password:
         raise ValueError("JWT requires credentials and provider db or ldap.")
     require_jwt_tls(base_url)
-    with httpx.Client(base_url=base_url.rstrip("/"), follow_redirects=False, timeout=30) as http:
+    with httpx.Client(base_url=base_url.rstrip("/"), follow_redirects=False, timeout=timeout) as http:
         response = http.post("/api/v1/security/login", json={"username":username,"password":password,"provider":provider,"refresh":True})
         response.raise_for_status()
         save_jwt_state(path, response.json())

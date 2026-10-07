@@ -2,109 +2,39 @@
 
 ## Status
 
-Research only. No code changes. This document supersedes the earlier speculative version with concrete evidence from FAB and Superset source as of 2026-06-06.
+Updated 2026-10-06 after rechecking concrete inheritance. The original conclusion that Superset 6.1.0 necessarily reaches FAB's abstract `validate_api_key` was incorrect. Implementation is tracked by [the continuation plan](2026-10-06-remaining-open-todos.md) and [ADR 0023](../decisions/0023-environment-bound-api-keys.md).
 
-## Evidence
+## Verified evidence
 
-### FAB
+- [Superset 6.1.0 release](https://github.com/apache/superset/releases/tag/6.1.0) is stable. Its [pyproject.toml](https://github.com/apache/superset/blob/6.1.0/pyproject.toml) permits `flask-appbuilder>=5.0.2,<6`.
+- [SupersetSecurityManager](https://github.com/apache/superset/blob/6.1.0/superset/security/manager.py) inherits `flask_appbuilder.security.sqla.manager.SecurityManager`, not just the abstract base.
+- [FAB 5.2.2's concrete SQLA manager](https://github.com/dpgaspar/Flask-AppBuilder/blob/v5.2.2/flask_appbuilder/security/sqla/manager.py) implements `validate_api_key`, key storage, hash verification, active/expiry checks, authenticated-user setup, and registration of the API-key blueprint when `FAB_API_KEY_ENABLED` is true.
+- [FAB 5.2.2's protect decorator](https://github.com/dpgaspar/Flask-AppBuilder/blob/v5.2.2/flask_appbuilder/security/decorators.py) checks API keys before JWT when enabled. Recognized prefixes default to `sst_`; custom `FAB_API_KEY_PREFIXES` are deployment settings.
+- Superset's [Next security documentation](https://superset.apache.org/admin-docs/security/) documents Bearer API keys, but is unreleased documentation and does not alone establish a stable release's capabilities.
 
-API-key authentication shipped in **Flask-AppBuilder 5.2.0** (release notes, FAB `CHANGELOG.rst`):
+## Target-version contract
 
-> feat: add API key authentication support (#2431) [Amin Ghadersohi]
+The verified source combination is **Superset 6.1.0 with FAB 5.2.2**, `FAB_API_KEY_ENABLED=True`, compatible initialized key storage, an active issued key, and a matching prefix. Superset 6.1.0's broad FAB range is not a guarantee that every installation has API-key support. No promise is made for older FAB, arbitrary Superset releases, or an unverified deployment. CLI code does not create keys, change server flags, initialize storage, or upgrade dependencies.
 
-Latest FAB at time of writing: 5.2.1.
+A real target deployment and credential were not used in this task. The binding command requires a successful authenticated read through the actual key before saving local configuration; mocks verify client behavior, not live deployment availability.
 
-The implementation is in `flask_appbuilder/security/decorators.py` (`protect()` decorator) and `flask_appbuilder/security/manager.py` (`BaseSecurityManager.extract_api_key_from_request` and `validate_api_key`). The request shape is:
+## CLI contract
 
-- Header: `Authorization: Bearer <api_key>`.
-- The token must start with one of the prefixes in `FAB_API_KEY_PREFIXES` (default `["sst_"]`). Tokens without a recognized prefix fall through to JWT validation.
-- The endpoint must be gated by `@protect()` (every `@expose` on `BaseApi` subclasses is).
-- The feature is enabled by `FAB_API_KEY_ENABLED=True` in Flask config. With the flag off, the API-key path in `protect()` is skipped entirely.
-
-`BaseSecurityManager.validate_api_key` is `NotImplementedError` — concrete subclasses (Superset's `SupersetSecurityManager`) must implement storage and verification.
-
-### Superset version matrix
-
-| Superset version | FAB pin | API-key wiring in Superset SM | Practical availability |
-| --- | --- | --- | --- |
-| 4.1.4 (and earlier 4.x) | `flask-appbuilder==4.5.0` | n/a (FAB lacks the feature) | **No** |
-| 6.1.0 (latest stable, May 2026) | `flask-appbuilder>=5.0.2, <6` | None — `grep ApiKey\|FAB_API_KEY` in `superset/security/manager.py` returns zero hits | **No** in practice |
-| master / future 7.x | `flask-appbuilder>=5.2.1, <6.0.0` | Yes — `ApiKey` view, `can_list/can_create/can_get/can_revoke` perms wired under `FAB_API_KEY_ENABLED=True` | **Yes** when flag is on |
-
-Note on 6.1.0: the pin `>=5.0.2` *allows* FAB 5.2.x to be installed, and FAB's `protect()` decorator and `extract_api_key_from_request` are then present. But because Superset 6.1.0's security manager subclass does not override `validate_api_key`, calls will hit `NotImplementedError`. The feature is effectively non-functional on 6.1.0 even with the flag enabled and a compatible FAB.
-
-### Token format (from FAB master)
-
-```python
-auth_header = request.headers.get("Authorization", "")
-if not auth_header.lower().startswith("bearer "):
-    return None
-token = auth_header[7:].strip()
-prefixes = current_app.config.get("FAB_API_KEY_PREFIXES", ["sst_"])
-for prefix in prefixes:
-    if token.startswith(prefix):
-        return token
-return None
-```
-
-So a CLI request looks like `Authorization: Bearer sst_<random>` (or any prefix the operator configured).
-
-### Not API keys
-
-The doc page **"Receive personal access tokens from OAuth2"** at `GET /api/v1/database/oauth2/` is unrelated. It's a callback endpoint for receiving OAuth2 tokens from *backing databases* (e.g. Snowflake OAuth) for per-user database authorization. The "personal access token" wording refers to the database's PAT, not a Superset API key. This endpoint must not be confused with Superset API-key auth.
-
-## Target-version assumption
-
-This CLI documents compatibility with current stable self-hosted Apache Superset OSS. Today that's 6.1.x. Under that constraint, API-key auth is **not available** in any released form.
-
-API-key auth becomes available when Superset 7.0 (or whichever release first ships the security-manager wiring currently on `master`) reaches a stable tag.
-
-## Provisional CLI contract (only valid once API keys are available)
-
-- Config additions:
-  - `instances[].auth.mode: cookie | jwt | api_key` (default `cookie`).
-  - `instances[].auth.api_key_env: SUPERSET_API_KEY_PROD` — name of an env var holding the secret. The secret is never persisted in the config file.
-- New subcommands:
-  - `auth api-key set <instance> --env <env-var-name>` registers the env-var binding.
-  - `auth api-key clear <instance>` removes it.
-- Client behavior:
-  - When `mode == api_key`, the client reads the secret from the named env var at call time and sends `Authorization: Bearer <key>` instead of the cookie header.
-  - Missing env var → clean CLI error directing the user to set it before retrying.
-  - The CLI does not call FAB's `ApiKey` issue/revoke endpoints — operators issue keys via the Superset UI or admin tooling, then provide them to the CLI through env vars only.
+- Explicit per-instance `auth.mode: api_key` and `auth.api_key: {env: EXAMPLE_SUPERSET_API_KEY, prefix: sst_}`.
+- `auth api-key set INSTANCE --env NAME [--prefix PREFIX]` reads the environment value, rejects malformed/missing credentials, and validates `GET /api/v1/me/` without redirects before saving only the binding.
+- `auth api-key clear INSTANCE` returns to cookie mode without deleting cookie or JWT state.
+- All API-backed workflows select the same shared client factory. API-key mode needs no browser auth file, never imports cookies, never refreshes JWT, and never replays a sent mutation.
+- HTTPS is required except loopback HTTP development; embedded URL credentials are rejected. CSRF and literal `--allow-write` remain enforced.
+- `auth status` reports credential availability, not live acceptance. `auth validate` performs the read check. API keys are not browser state and cannot be exported to Playwright.
 
 ## Secret handling
 
-- Secrets are read from environment only. Storing keys in the config file is out of scope and remains forbidden.
-- Logging and `--json` outputs must never include the secret value. JSON shape includes only `mode` and `api_key_env` name.
+Never persist or print keys. Only environment variable names and prefixes enter config/output. Each invocation rereads the environment, allowing rotation without rewriting config. No API-key issue/revoke endpoint is added. Existing cookie/JWT defaults and JSON shapes remain unchanged.
 
-## Auth-mode selection precedence
+## Alternatives
 
-When implemented, mode resolution should match the precedence proposed in [[default-instance-selection]]:
-
-1. `--auth-mode` CLI flag (per-invocation override).
-2. `instances[].auth.mode` in config.
-3. Implicit fallback: `cookie` if storage state exists for the instance, otherwise error with a clear message.
-
-## Prerequisites before picking up the implementation ticket
-
-The follow-up ticket `2026-06-06-api-key-auth-support.md` (already in `todo/`) is gated on **all** of these being independently verified against the target instance's actual release at the time of implementation:
-
-1. The Superset release in use lists API-key auth in its release notes / `CHANGELOG/*.md` as a stable feature (not behind an experimental feature flag other than `FAB_API_KEY_ENABLED`).
-2. `superset/security/manager.py` for that release overrides `validate_api_key`, `extract_api_key_from_request`, and the create/revoke helpers (or inherits a working implementation from FAB's concrete SQLA subclass).
-3. The `Authorization: Bearer <key>` header successfully authenticates a request to the read endpoints this CLI uses (`/api/v1/dashboard/`, `/api/v1/chart/`, etc.) on the target instance.
-
-Until those three checks succeed for a specific release, API-key auth must be treated as **not available** for this CLI.
-
-## Recommendation
-
-Defer implementation. The current CLI compatibility target (Superset 6.1.x) does not support API-key auth in any usable form. JWT auth ([[jwt-auth-design]]) covers the same "headless credentials" use case today and is the right next step if the user wants to expand beyond browser sessions.
-
-Revisit this ticket once Superset 7.x stable ships with the API-key wiring observed on `master`.
+Continuing to block all API-key support based on the abstract superclass would preserve an incorrect assumption. Blindly treating any Bearer token or Superset version as supported would guess through real deployment requirements. An explicit, validated environment binding uses the verified protocol while leaving unsupported deployments safely rejected.
 
 ## Decision follow-up
 
-No durable decision change yet. A decision record should be added only when implementation is approved; it should record:
-- The verified Superset version and release date.
-- The `FAB_API_KEY_ENABLED=True` requirement on the server.
-- The chosen `Authorization: Bearer <prefix>...` header format and which `FAB_API_KEY_PREFIXES` value is assumed.
-- The env-var-only secret rule.
+Decision record update required: [ADR 0023](../decisions/0023-environment-bound-api-keys.md).

@@ -1,6 +1,7 @@
 import copy
 import json
 import re
+from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -8,6 +9,11 @@ import httpx
 from pydantic import BaseModel, Field
 
 from superset_cli.jwt_auth import load_jwt_state, refresh_jwt, require_jwt_tls
+from superset_cli.api_key_auth import read_api_key
+from superset_cli.models import APIKeySettings
+
+
+HTTP_TIMEOUT: ContextVar[float] = ContextVar("superset_http_timeout", default=30.0)
 
 
 class AuthExpiredError(Exception):
@@ -71,7 +77,38 @@ def format_api_error(exc: httpx.HTTPStatusError) -> str:
 def build_q_params(q: dict) -> dict:
     if not q:
         return {}
-    return {"q": json.dumps(q)}
+    # FAB parses JSON q with parse_qs after Flask has already URL-decoded it.
+    encoded = re.sub(
+        r'"(?:\\.|[^"\\])*"|e\+',
+        lambda match: "e" if match[0] == "e+" else match[0].replace("+", r"\u002b").replace("%", r"\u0025").replace("&", r"\u0026"),
+        json.dumps(q),
+    )
+    return {"q": encoded}
+
+
+def validate_list_columns(columns: list[str] | None) -> list[str]:
+    columns = columns or []
+    if (any(not isinstance(col, str) or not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", col) for col in columns)
+            or len(set(columns)) != len(columns)):
+        raise ValueError("Columns must be unique field names; repeat --columns once per field.")
+    return columns
+
+
+def validate_list_filters(filters: list[dict] | None) -> list[dict]:
+    filters = filters or []
+    for item in filters:
+        if (not isinstance(item, dict) or set(item) != {"col", "opr", "value"}
+                or any(not isinstance(item[key], str) or not re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", item[key]) for key in ("col", "opr"))):
+            raise ValueError('Each filter must be a JSON object with col, opr, and value.')
+        json.dumps(item["value"], allow_nan=False)
+    return filters
+
+
+def parse_list_filters(values: list[str] | None) -> list[dict]:
+    try:
+        return validate_list_filters([json.loads(value) for value in values or []])
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise ValueError('Each filter must be finite JSON with col, opr, and value.') from exc
 
 
 def build_list_params(
@@ -82,7 +119,11 @@ def build_list_params(
     search_column: str | None = None,
     order_column: str | None = None,
     order_direction: str | None = None,
+    filters: list[dict] | None = None,
+    columns: list[str] | None = None,
 ) -> dict:
+    filters = validate_list_filters(filters)
+    columns = validate_list_columns(columns)
     q: dict = {}
     if page is not None:
         q["page"] = page
@@ -90,6 +131,10 @@ def build_list_params(
         q["page_size"] = page_size
     if search and search_column is not None:
         q["filters"] = [{"col": search_column, "opr": "ct", "value": search}]
+    if filters:
+        q["filters"] = [*q.get("filters", []), *filters]
+    if columns:
+        q["columns"] = columns
     if order_column is not None:
         q["order_column"] = order_column
     if order_direction is not None:
@@ -150,12 +195,24 @@ def build_cookie_header(state: StorageState) -> str:
 
 
 class SupersetClient:
-    def __init__(self, *, base_url: str, storage_state_path: Path) -> None:
+    def __init__(self, *, base_url: str, storage_state_path: Path | None = None,
+                 api_key: APIKeySettings | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.storage_state_path = storage_state_path
-        payload = json.loads(storage_state_path.read_text())
-        self.jwt_mode = storage_state_path.name == "jwt-state.json" or (isinstance(payload, dict) and payload.get("mode") == "jwt")
-        if self.jwt_mode:
+        self.api_key_mode = api_key is not None
+        if self.api_key_mode:
+            require_jwt_tls(self.base_url)
+            key = read_api_key(api_key)
+            payload = {}
+        elif storage_state_path is not None:
+            payload = json.loads(storage_state_path.read_text())
+        else:
+            raise ValueError("Saved authentication state is required.")
+        self.jwt_mode = not self.api_key_mode and (storage_state_path.name == "jwt-state.json" or (isinstance(payload, dict) and payload.get("mode") == "jwt"))
+        if self.api_key_mode:
+            self.storage_state = StorageState()
+            auth_headers = {"Authorization": f"Bearer {key}"}
+        elif self.jwt_mode:
             require_jwt_tls(self.base_url)
             try:
                 state = load_jwt_state(storage_state_path)
@@ -169,8 +226,8 @@ class SupersetClient:
         self.http = httpx.Client(
             base_url=self.base_url,
             headers={"Accept": "application/json", **auth_headers},
-            follow_redirects=not self.jwt_mode,
-            timeout=30.0,
+            follow_redirects=not (self.jwt_mode or self.api_key_mode),
+            timeout=HTTP_TIMEOUT.get(),
         )
         self._csrf_token: str | None = None
 
@@ -255,6 +312,7 @@ class SupersetClient:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 401:
                 raise AuthExpiredError(
+                    "API key rejected or expired; verify the environment binding and server capability." if self.api_key_mode else
                     "JWT expired or invalid. Run 'auth jwt login'." if self.jwt_mode else
                     "Session expired or invalid. Run 'auth login' to re-authenticate."
                 ) from exc
@@ -267,6 +325,7 @@ class SupersetClient:
             return response.json()
         except json.JSONDecodeError:
             raise AuthExpiredError(
+                "API key request returned non-JSON; verify server capability and authentication." if self.api_key_mode else
                 "Unexpected non-JSON response — session may have expired. Run 'auth login' to re-authenticate."
             )
 
@@ -375,27 +434,12 @@ class SupersetClient:
             result["warning"] = "Effective owners differ from requested IDs: the non-admin caller may have been retained or owners changed concurrently. Do not blindly retry."
         return result
 
-    def list_dashboards(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
-        return self._get(
-            "/api/v1/dashboard/",
-            params=build_list_params(
-                page=page,
-                page_size=page_size,
-                search=search,
-                search_column="dashboard_title",
-                order_column=order_column,
-                order_direction=order_direction,
-            )
-            or None,
-        )
+    def list_dashboards(self, *, page: int | None = None, page_size: int | None = None,
+                        search: str | None = None, order_column: str | None = None,
+                        order_direction: str | None = None, **list_options) -> dict:
+        return self._list_resource("/api/v1/dashboard/", search_column="dashboard_title",
+                                   page=page, page_size=page_size, search=search,
+                                   order_column=order_column, order_direction=order_direction, **list_options)
 
     def get_dashboard(self, id_or_slug: str) -> dict:
         return self._get(f"/api/v1/dashboard/{id_or_slug}").get("result", {})
@@ -406,27 +450,12 @@ class SupersetClient:
     def get_dashboard_datasets(self, id_or_slug: str) -> list[dict]:
         return self._get(f"/api/v1/dashboard/{id_or_slug}/datasets").get("result", [])
 
-    def list_charts(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
-        return self._get(
-            "/api/v1/chart/",
-            params=build_list_params(
-                page=page,
-                page_size=page_size,
-                search=search,
-                search_column="slice_name",
-                order_column=order_column,
-                order_direction=order_direction,
-            )
-            or None,
-        )
+    def list_charts(self, *, page: int | None = None, page_size: int | None = None,
+                    search: str | None = None, order_column: str | None = None,
+                    order_direction: str | None = None, **list_options) -> dict:
+        return self._list_resource("/api/v1/chart/", search_column="slice_name",
+                                   page=page, page_size=page_size, search=search,
+                                   order_column=order_column, order_direction=order_direction, **list_options)
 
     def get_chart(self, id_or_uuid: str) -> dict:
         return self._get(f"/api/v1/chart/{id_or_uuid}").get("result", {})
@@ -452,52 +481,22 @@ class SupersetClient:
                 query["filters"] = query.get("filters", []) + copy.deepcopy(filters)
         return self._post("/api/v1/chart/data", json_body=context)
 
-    def list_datasets(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
-        return self._get(
-            "/api/v1/dataset/",
-            params=build_list_params(
-                page=page,
-                page_size=page_size,
-                search=search,
-                search_column="table_name",
-                order_column=order_column,
-                order_direction=order_direction,
-            )
-            or None,
-        )
+    def list_datasets(self, *, page: int | None = None, page_size: int | None = None,
+                      search: str | None = None, order_column: str | None = None,
+                      order_direction: str | None = None, **list_options) -> dict:
+        return self._list_resource("/api/v1/dataset/", search_column="table_name",
+                                   page=page, page_size=page_size, search=search,
+                                   order_column=order_column, order_direction=order_direction, **list_options)
 
     def get_dataset(self, id_or_uuid: str) -> dict:
         return self._get(f"/api/v1/dataset/{id_or_uuid}").get("result", {})
 
-    def list_databases(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
-        return self._get(
-            "/api/v1/database/",
-            params=build_list_params(
-                page=page,
-                page_size=page_size,
-                search=search,
-                search_column="database_name",
-                order_column=order_column,
-                order_direction=order_direction,
-            )
-            or None,
-        )
+    def list_databases(self, *, page: int | None = None, page_size: int | None = None,
+                       search: str | None = None, order_column: str | None = None,
+                       order_direction: str | None = None, **list_options) -> dict:
+        return self._list_resource("/api/v1/database/", search_column="database_name",
+                                   page=page, page_size=page_size, search=search,
+                                   order_column=order_column, order_direction=order_direction, **list_options)
 
     def get_database(self, pk: str) -> dict:
         return self._get(f"/api/v1/database/{pk}").get("result", {})
@@ -531,20 +530,20 @@ class SupersetClient:
     def get_current_user_roles(self) -> dict:
         return self._get("/api/v1/me/roles/").get("result", {})
 
-    def list_roles(self, *, search: str | None = None) -> dict:
-        return self._get("/api/v1/security/roles/", params=build_list_params(search=search, search_column="name") or None)
+    def list_roles(self, *, search: str | None = None, **list_options) -> dict:
+        return self._list_resource("/api/v1/security/roles/", search=search, search_column="name", **list_options)
 
     def get_role(self, pk: str) -> dict:
         return self._get(f"/api/v1/security/roles/{pk}").get("result", {})
 
-    def list_users(self, *, search: str | None = None) -> dict:
-        return self._get("/api/v1/security/users/", params=build_list_params(search=search, search_column="username") or None)
+    def list_users(self, *, search: str | None = None, **list_options) -> dict:
+        return self._list_resource("/api/v1/security/users/", search=search, search_column="username", **list_options)
 
     def get_user(self, pk: str) -> dict:
         return self._get(f"/api/v1/security/users/{pk}").get("result", {})
 
-    def list_rls_rules(self) -> dict:
-        return self._get("/api/v1/rowlevelsecurity/")
+    def list_rls_rules(self, **list_options) -> dict:
+        return self._list_resource("/api/v1/rowlevelsecurity/", **list_options)
 
     def get_rls_rule(self, pk: str) -> dict:
         return self._get(f"/api/v1/rowlevelsecurity/{pk}").get("result", {})
@@ -556,40 +555,92 @@ class SupersetClient:
         return self._get(f"/api/v1/explore/form_data/{key}").get("form_data", {})
 
     def _list_resource(
-        self,
-        path: str,
-        *,
-        search_column: str | None,
-        page: int | None,
-        page_size: int | None,
-        search: str | None,
-        order_column: str | None,
-        order_direction: str | None,
+        self, path: str, *, search_column: str | None = None,
+        page: int | None = None, page_size: int | None = None,
+        search: str | None = None, order_column: str | None = None,
+        order_direction: str | None = None, filters: list[dict] | None = None,
+        columns: list[str] | None = None, all_pages: bool = False,
     ) -> dict:
-        return self._get(
-            path,
-            params=build_list_params(
-                page=page,
-                page_size=page_size,
-                search=search,
-                search_column=search_column,
-                order_column=order_column,
-                order_direction=order_direction,
-            )
-            or None,
-        )
+        if all_pages and page is not None:
+            raise ValueError("--all cannot be combined with --page.")
+        if (page is not None and (type(page) is not int or page < 0)
+                or page_size is not None and (type(page_size) is not int or page_size < 1)):
+            raise ValueError("Page must be non-negative and page size positive.")
+        params = build_list_params(page=page, page_size=page_size, search=search,
+                                   search_column=search_column, order_column=order_column,
+                                   order_direction=order_direction, filters=filters, columns=columns)
+        if filters:
+            try:
+                info = self._get(f"{path.rstrip('/')}/_info", params=build_q_params({"keys": ["filters"]}))
+            except NotFoundError:
+                # Superset's log API omits _info; its list endpoint still validates filters.
+                pass
+            else:
+                supported = info.get("filters") if isinstance(info, dict) else None
+                if not isinstance(supported, dict):
+                    raise ValueError("Invalid list filter metadata.")
+                for item in filters:
+                    entries = supported.get(item["col"], [])
+                    if (not isinstance(entries, list)
+                            or any(not isinstance(entry, dict) or not isinstance(entry.get("operator"), str) for entry in entries)):
+                        raise ValueError("Invalid list filter metadata.")
+                    if item["opr"] not in {entry["operator"] for entry in entries}:
+                        raise ValueError(f"Unsupported list filter: {item['col']} / {item['opr']}.")
+        if columns or all_pages:
+            metadata = self._get(path, params=build_q_params({"page": 0, "page_size": 1, "keys": ["list_columns", "order_columns"]}))
+            if not isinstance(metadata, dict) or not isinstance(metadata.get("order_columns", []), list):
+                raise ValueError("Invalid list metadata.")
+            supported_columns = metadata.get("list_columns")
+            if columns and (not isinstance(supported_columns, list) or any(col not in supported_columns for col in columns)):
+                raise ValueError("Unsupported list column selection; inspect the resource list_columns metadata.")
+            if all_pages and order_column is None and "id" in metadata.get("order_columns", []):
+                params = build_list_params(page_size=page_size, search=search, search_column=search_column,
+                                           order_column="id", order_direction=order_direction or "asc",
+                                           filters=filters, columns=columns)
+        if not all_pages:
+            return self._get(path, params=params or None)
+        query = json.loads(params.get("q", "{}"))
+        query["page_size"] = page_size or 100
+        items, ids, seen = [], [], set()
+        total = None
+        page_index = 0
+        while True:
+            payload = self._get(path, params=build_q_params({**query, "page": page_index}))
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid list page metadata.")
+            count, rows = payload.get("count"), payload.get("result")
+            if type(count) is not int or count < 0 or (total is not None and count != total):
+                raise ValueError("List count changed or is invalid; complete traversal cannot be verified.")
+            total = count
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                raise ValueError("Invalid list rows; complete traversal cannot be verified.")
+            if not rows and len(items) < total:
+                raise ValueError("Premature empty page; complete traversal cannot be verified.")
+            page_ids = payload.get("ids", [row.get("id") for row in rows])
+            if not isinstance(page_ids, list) or len(page_ids) != len(rows):
+                raise ValueError("Missing or mismatched list identity metadata.")
+            for row, pk in zip(rows, page_ids):
+                if (isinstance(pk, bool) or not isinstance(pk, (str, int)) or str(pk) == ""
+                        or ("id" in row and str(row["id"]) != str(pk))):
+                    raise ValueError("Missing or mismatched list identity.")
+                identity = str(pk)
+                if identity in seen:
+                    raise ValueError("Duplicate list identity; traversal made no reliable progress.")
+                seen.add(identity)
+            items.extend(rows)
+            ids.extend(page_ids)
+            if len(items) > total:
+                raise ValueError("List rows exceed the reported count.")
+            if len(items) == total:
+                return {"count": total, "ids": ids, "result": items}
+            page_index += 1
 
-    def list_annotation_layers(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
+    def list_annotation_layers(self, *, page: int | None = None, page_size: int | None = None,
+                               search: str | None = None, order_column: str | None = None,
+                               order_direction: str | None = None, **list_options) -> dict:
         return self._list_resource(
             "/api/v1/annotation_layer/",
+            **list_options,
             search_column="name",
             page=page,
             page_size=page_size,
@@ -601,17 +652,12 @@ class SupersetClient:
     def get_annotation_layer(self, pk: str) -> dict:
         return self._get(f"/api/v1/annotation_layer/{pk}").get("result", {})
 
-    def list_css_templates(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
+    def list_css_templates(self, *, page: int | None = None, page_size: int | None = None,
+                           search: str | None = None, order_column: str | None = None,
+                           order_direction: str | None = None, **list_options) -> dict:
         return self._list_resource(
             "/api/v1/css_template/",
+            **list_options,
             search_column="template_name",
             page=page,
             page_size=page_size,
@@ -623,17 +669,12 @@ class SupersetClient:
     def get_css_template(self, pk: str) -> dict:
         return self._get(f"/api/v1/css_template/{pk}").get("result", {})
 
-    def list_themes(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
+    def list_themes(self, *, page: int | None = None, page_size: int | None = None,
+                    search: str | None = None, order_column: str | None = None,
+                    order_direction: str | None = None, **list_options) -> dict:
         return self._list_resource(
             "/api/v1/theme/",
+            **list_options,
             search_column="theme_name",
             page=page,
             page_size=page_size,
@@ -645,17 +686,12 @@ class SupersetClient:
     def get_theme(self, pk: str) -> dict:
         return self._get(f"/api/v1/theme/{pk}").get("result", {})
 
-    def list_tags(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
+    def list_tags(self, *, page: int | None = None, page_size: int | None = None,
+                  search: str | None = None, order_column: str | None = None,
+                  order_direction: str | None = None, **list_options) -> dict:
         return self._list_resource(
             "/api/v1/tag/",
+            **list_options,
             search_column="name",
             page=page,
             page_size=page_size,
@@ -667,17 +703,12 @@ class SupersetClient:
     def get_tag(self, pk: str) -> dict:
         return self._get(f"/api/v1/tag/{pk}").get("result", {})
 
-    def list_reports(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
+    def list_reports(self, *, page: int | None = None, page_size: int | None = None,
+                     search: str | None = None, order_column: str | None = None,
+                     order_direction: str | None = None, **list_options) -> dict:
         return self._list_resource(
             "/api/v1/report/",
+            **list_options,
             search_column="name",
             page=page,
             page_size=page_size,
@@ -689,17 +720,12 @@ class SupersetClient:
     def get_report(self, pk: str) -> dict:
         return self._get(f"/api/v1/report/{pk}").get("result", {})
 
-    def list_saved_queries(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
+    def list_saved_queries(self, *, page: int | None = None, page_size: int | None = None,
+                           search: str | None = None, order_column: str | None = None,
+                           order_direction: str | None = None, **list_options) -> dict:
         return self._list_resource(
             "/api/v1/saved_query/",
+            **list_options,
             search_column="label",
             page=page,
             page_size=page_size,
@@ -711,17 +737,12 @@ class SupersetClient:
     def get_saved_query(self, pk: str) -> dict:
         return self._get(f"/api/v1/saved_query/{pk}").get("result", {})
 
-    def list_queries(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        search: str | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
+    def list_queries(self, *, page: int | None = None, page_size: int | None = None,
+                     search: str | None = None, order_column: str | None = None,
+                     order_direction: str | None = None, **list_options) -> dict:
         return self._list_resource(
             "/api/v1/query/",
+            **list_options,
             search_column="sql",
             page=page,
             page_size=page_size,
@@ -733,16 +754,12 @@ class SupersetClient:
     def get_query(self, pk: str) -> dict:
         return self._get(f"/api/v1/query/{pk}").get("result", {})
 
-    def list_logs(
-        self,
-        *,
-        page: int | None = None,
-        page_size: int | None = None,
-        order_column: str | None = None,
-        order_direction: str | None = None,
-    ) -> dict:
+    def list_logs(self, *, page: int | None = None, page_size: int | None = None,
+                  order_column: str | None = None, order_direction: str | None = None,
+                  **list_options) -> dict:
         return self._list_resource(
             "/api/v1/log/",
+            **list_options,
             search_column=None,
             page=page,
             page_size=page_size,

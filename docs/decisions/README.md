@@ -57,6 +57,11 @@ For a copyable starting point, use `../templates/decision-record-template.md`.
 
 ## Current decision records
 
+- [0022: Explicit server-side list query controls](./0022-explicit-list-query-controls.md)
+- [0023: Environment-bound API keys](./0023-environment-bound-api-keys.md)
+
+- [0021: Per-invocation HTTP timeout](./0021-per-invocation-http-timeout.md)
+
 - [0010: Write-scope expansion](./0010-write-scope-expansion.md)
 - [0011: Custom API authentication](./0011-custom-api-authentication.md)
 - [0012: Chart-data output contract](./0012-chart-data-output-contract.md)
