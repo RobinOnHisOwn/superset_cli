@@ -20,6 +20,7 @@ Expand the product scope from read-only to "read by default, write opt-in." The 
 - **charts**: create, update, delete, favorite, unfavorite.
 - **dashboards**: create, update, delete, favorite, unfavorite, copy.
 - **datasets**: create, update, delete, refresh.
+- **cache controls** (2026-10-07): targeted dataset cache invalidation and explicit chart-result force refresh; see [ADR 0024](0024-targeted-cache-controls.md). No global backend deletion or deployment changes.
 - **databases**: create, update, delete, test-connection.
 - **saved-queries**: create, update, delete.
 - **sqllab**: execute, format-sql, estimate, stop-query.

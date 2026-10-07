@@ -57,6 +57,8 @@ For a copyable starting point, use `../templates/decision-record-template.md`.
 
 ## Current decision records
 
+- [0024: Targeted cache controls](./0024-targeted-cache-controls.md)
+
 - [0022: Explicit server-side list query controls](./0022-explicit-list-query-controls.md)
 - [0023: Environment-bound API keys](./0023-environment-bound-api-keys.md)
 

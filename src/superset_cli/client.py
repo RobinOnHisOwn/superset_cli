@@ -460,8 +460,11 @@ class SupersetClient:
     def get_chart(self, id_or_uuid: str) -> dict:
         return self._get(f"/api/v1/chart/{id_or_uuid}").get("result", {})
 
-    def get_chart_data(self, pk: str, *, time_range: str | None = None, filters: list[dict] | None = None) -> dict:
+    def get_chart_data(self, pk: str, *, time_range: str | None = None, filters: list[dict] | None = None,
+                       force: bool = False) -> dict:
         if time_range is None and not filters:
+            if force:
+                return self._get(f"/api/v1/chart/{pk}/data/", params={"force": "true"})
             return self._get(f"/api/v1/chart/{pk}/data/")
         context = self.get_chart(pk).get("query_context")
         if isinstance(context, str):
@@ -472,6 +475,8 @@ class SupersetClient:
         if not isinstance(context, dict) or not context.get("queries") or not isinstance(context["queries"], list):
             raise ValueError("Saved chart has no usable query_context; save it in Explore first.")
         context = copy.deepcopy(context)
+        if force:
+            context["force"] = True
         for query in context["queries"]:
             if not isinstance(query, dict) or not isinstance(query.get("filters", []), list):
                 raise ValueError("Saved chart query_context has invalid query filters.")
@@ -480,6 +485,28 @@ class SupersetClient:
             if filters:
                 query["filters"] = query.get("filters", []) + copy.deepcopy(filters)
         return self._post("/api/v1/chart/data", json_body=context)
+
+    def invalidate_dataset_cache(self, dataset_ids: list[int]) -> dict:
+        if not dataset_ids or any(type(pk) is not int or pk < 1 for pk in dataset_ids):
+            raise ValueError("Cache invalidation requires positive integer dataset IDs.")
+        ids = list(dict.fromkeys(dataset_ids))
+        path = "/api/v1/cachekey/invalidate"
+        spec = self.get_openapi_spec()
+        try:
+            body = _resolve_schema(spec, spec["paths"][path]["post"]["requestBody"])
+            schema = _resolve_schema(spec, body["content"]["application/json"]["schema"])
+            uids = _resolve_schema(spec, schema["properties"]["datasource_uids"])
+            if uids.get("type") != "array" or _resolve_schema(spec, uids["items"]).get("type") != "string":
+                raise ValueError("Invalid datasource UID schema")
+        except (KeyError, TypeError, AttributeError, ValueError, RecursionError):
+            raise ValueError("Unsupported cache invalidation API schema; inspect target OpenAPI and permissions.") from None
+        datasource_uids = [f"{pk}__table" for pk in ids]
+        try:
+            response = self._post(path, json_body={"datasource_uids": datasource_uids})
+        except httpx.RequestError:
+            raise ValueError("Cache invalidation outcome unknown after a network error. Check server state before retrying; no automatic retry was performed.") from None
+        return {"dataset_ids": ids, "datasource_uids": datasource_uids, "accepted": True,
+                "eviction_verified": False, "response": response}
 
     def list_datasets(self, *, page: int | None = None, page_size: int | None = None,
                       search: str | None = None, order_column: str | None = None,

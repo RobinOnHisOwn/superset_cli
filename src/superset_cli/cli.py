@@ -81,6 +81,8 @@ security_app.add_typer(roles_app, name="roles")
 security_app.add_typer(users_app, name="users")
 app.add_typer(explore_app, name="explore")
 app.add_typer(import_app, name="import")
+cache_app = InstanceTyper(help="Targeted cache administration. Requires --allow-write.")
+app.add_typer(cache_app, name="cache")
 
 
 def _validate_list_filters(value):
@@ -1864,7 +1866,12 @@ def charts_data(
     as_csv: Annotated[bool, typer.Option("--csv", help="CSV tables separated by a blank line; __timestamp in UTC.")] = False,
     time_range: Annotated[str | None, typer.Option("--time-range", help="Override every query's Superset time range.")] = None,
     filters: Annotated[list[str] | None, typer.Option("--filter", help="Append a string equality filter col=value; repeatable.")] = None,
+    force: Annotated[bool, typer.Option("--force", help="Load requested queries from source and refresh their cache; requires --allow-write.")] = False,
+    allow_write: Annotated[bool, typer.Option("--allow-write", help="Required to actually perform the write. Without it the command is a dry-run. Applies to --force.")] = False,
+    cache_info: Annotated[bool, typer.Option("--cache-info", help="Show per-query server cache metadata in human output; JSON/CSV stay unchanged.")] = False,
 ) -> None:
+    if force:
+        _require_allow_write(allow_write, action=f"force-refresh chart {pk} results and their cache")
     query_filters = []
     for value in filters or []:
         col, separator, val = value.partition("=")
@@ -1883,8 +1890,10 @@ def charts_data(
     with _api_errors():
         with _client(instance=instance, storage_state_path=storage_state_path) as client:
             try:
-                payload = (client.get_chart_data(pk, time_range=time_range, filters=query_filters)
-                           if time_range is not None or query_filters else client.get_chart_data(pk))
+                options = {"time_range": time_range, "filters": query_filters} if time_range is not None or query_filters else {}
+                if force:
+                    options["force"] = True
+                payload = client.get_chart_data(pk, **options)
             except ValueError as exc:
                 typer.echo(str(exc), err=True)
                 raise typer.Exit(code=2) from exc
@@ -1919,6 +1928,15 @@ def charts_data(
                 rowcount = len(query.get("data") or [])
             cols = query.get("colnames") or []
             typer.echo(f"  [{idx}] rows={rowcount} columns={','.join(cols)}")
+            if cache_info:
+                hit = query.get("is_cached")
+                status = "hit" if hit is True else "miss" if hit is False else "unknown"
+                metadata = {key: json.dumps(query[key], ensure_ascii=True) if key in query else "unknown"
+                            for key in ("cache_key", "cached_dttm", "cache_timeout")}
+                timeout = metadata["cache_timeout"]
+                if query.get("cache_timeout") == -1:
+                    timeout += " (disabled)"
+                typer.echo(f"  [{idx}] cache={status} key={metadata['cache_key']} cached_at={metadata['cached_dttm']} timeout={timeout}")
     successful = [query for query in queries if query.get("status", "success") == "success"]
     if queries and not successful:
         detail = next((query.get("error") for query in queries if query.get("error")), "unknown error")
@@ -1946,6 +1964,28 @@ def _require_allow_write(allow_write: bool, *, action: str) -> None:
         f"This would {action}. Re-run with --allow-write to perform the write."
     )
     raise typer.Exit(code=1)
+
+
+@cache_app.command("invalidate")
+def cache_invalidate(
+    ctx: typer.Context,
+    instance_name: str,
+    dataset_ids: Annotated[list[int], typer.Option("--dataset", min=1, help="Positive numeric dataset ID; repeat to target multiple datasets.")],
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    _require_allow_write(allow_write, action=f"invalidate tracked cache entries for datasets {', '.join(map(str, dataset_ids))}")
+    instance = _require_instance(ctx, instance_name)
+    state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+    with _api_errors():
+        with _client(instance=instance, storage_state_path=state_path) as client:
+            payload = client.invalidate_dataset_cache(dataset_ids)
+    if as_json:
+        typer.echo(json.dumps(payload, separators=(",", ":")))
+    else:
+        typer.echo(f"Cache invalidation request accepted for datasets {', '.join(map(str, payload['dataset_ids']))}; eviction not verified.")
+        typer.echo("Requires tracked keys and compatible cache/data-cache backends; verify normal non-forced results before claiming eviction.")
 
 
 def _load_body(body: str | None, file: Path | None) -> dict:

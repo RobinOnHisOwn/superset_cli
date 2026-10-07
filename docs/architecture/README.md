@@ -63,6 +63,20 @@ HTTPS/redirect safety, existing CSRF, and no cookie/JWT recovery for that mode.
 read. Tests: `tests/test_api_key_auth.py`. Verified version/configuration limits:
 [ADR 0023](../decisions/0023-environment-bound-api-keys.md).
 
+## Cache control entry points
+
+`charts data --force` uses `charts_data` and `SupersetClient.get_chart_data(force=True)`;
+`_require_allow_write` runs before access. Saved reads use GET `force=true`; overrides
+use top-level boolean `force` in the copied context. `--cache-info` formats existing
+response metadata only in human output, preserving JSON/CSV and query exit rules.
+
+`cache invalidate` maps to `cli.py::cache_invalidate` and
+`client.py::invalidate_dataset_cache`. It validates numeric targets and the target
+OpenAPI request schema, maps IDs to SQLA datasource UIDs, and reuses `_post`/CSRF
+and the shared auth factory. Acceptance is distinct from verified eviction;
+network outcomes are unknown and no sent write replays. Tests:
+`tests/test_cache_controls.py`. See [ADR 0024](../decisions/0024-targeted-cache-controls.md).
+
 ## HTTP timeout entry point
 
 The root `--timeout` option is validated in `cli.py` before command execution.
@@ -129,6 +143,7 @@ Current command groups:
 - `saved-queries` (read + write)
 - `queries`, `logs`
 - `sqllab` (write-only group: execute, format-sql, estimate, stop-query)
+- `cache` (explicitly targeted tracked-key invalidation; requires `--allow-write`)
 - `security` (role/user/RLS reads and explicit opt-in writes)
 - `explore` (saved-chart state and cached form-data reads)
 - `import` (write-only group: server-side multipart asset bundles)

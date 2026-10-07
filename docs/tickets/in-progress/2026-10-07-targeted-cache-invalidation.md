@@ -1,6 +1,8 @@
 # Add targeted dataset cache invalidation
 
-- Status: todo
+- Status: in-progress
+- Implemented 2026-10-07: guarded numeric/deduplicated targets, source-verified UID mapping, runtime OpenAPI schema gate, shared cookie/JWT/API-key/CSRF transport, truthful acceptance JSON/human output, and no write replay. ADR 0024; focused tests: 90 passed; full suite passes; built wheel verified.
+- Blocked: isolated live eviction acceptance needs explicit live-mutation authorization and a target with verified tracking/backend alignment. No such target/authorization was supplied. HTTP success must not be substituted for this gate. All CLI implementation work is complete.
 - Priority: high
 - Type: code
 - Created by: agent

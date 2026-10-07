@@ -59,7 +59,7 @@ superset-cli --help
 
 Upgrade with `uv tool upgrade superset-cli`. Python 3.12 or newer is required;
 uv can provision Python when needed. `pipx install superset-cli` is an alternative.
-PyPI `0.1.0` was verified on 2026-10-06: its wheel includes the API command, CSRF handling, validated cookie-import fallback, and `--clear-query-context`, but no `--version` flag. A local installation also labeled `0.1.0` lacked those capabilities; version labels alone are insufficient. This checkout builds distinct **0.2.0** artifacts with `--version`; they have not been published.
+PyPI `0.1.0` was verified on 2026-10-06: its wheel includes the API command, CSRF handling, validated cookie-import fallback, and `--clear-query-context`, but no `--version` flag. A local installation also labeled `0.1.0` lacked those capabilities; version labels alone are insufficient. PyPI **0.2.0** was rechecked on 2026-10-07 and includes `--version`, owners, CSRF handling, and Playwright export. This checkout builds distinct unpublished **0.3.0** artifacts with the new cache controls. An isolated upgrade from 0.1.0 through 0.2.0 to the built 0.3.0 wheel preserved synthetic config/auth files; no publication was performed.
 
 Check `command -v superset-cli`, then its installation owner (`uv tool list` or `pipx list`). If it is installed but missing from PATH, use `uv tool update-shell` or `pipx ensurepath` rather than installing another copy. Upgrade with the same tool (`uv tool upgrade superset-cli` or `pipx upgrade superset-cli`). Config/auth files remain separate from the package installation. Check `api --help` and `charts update --help` once per session for required capabilities; use `--version` when available. Inside this source checkout, select `uv run superset-cli` explicitly.
 
@@ -343,6 +343,57 @@ original saved-chart GET endpoint is used. The chart must have a usable saved
 ```bash
 uv run superset-cli charts data prod 10 --time-range '2026-04-01 : 2026-05-01' --filter region=west --json
 ```
+
+### Chart cache controls
+
+```bash
+uv run superset-cli charts data prod 10 --cache-info
+uv run superset-cli charts data prod 10 --force --allow-write --json
+uv run superset-cli charts data prod 10 --time-range 'Last week' --filter region=west --force --allow-write --csv
+uv run superset-cli cache invalidate prod --dataset 21 --dataset 22 --allow-write --json
+```
+
+Use discovered numeric IDs; these examples do not authorize live writes.
+`--cache-info` reports each query's server-supplied cache hit/miss, key, timestamp,
+and timeout without extra requests. Missing metadata is unknown, null stays null,
+false means a miss, zero stays zero, and -1 denotes disabled caching. JSON and CSV
+remain unchanged, including errors/empty-result exits. Different native-filter
+combinations can have different cache keys; HTTP success is not freshness proof.
+
+`--force` loads the exact requested queries from source and normally replaces
+those cache entries, unless caching is disabled. It does not update saved chart
+configuration or invalidate every dataset/filter combination. Saved-chart GET
+uses `force=true`; copied override POST uses top-level boolean `force`. Because
+force refresh deliberately changes cached state, it requires literal
+`--allow-write` before auth/network access. Ordinary chart reads and non-force
+query overrides retain their existing behavior. Source-verified on Superset 6.1.0;
+unsupported endpoints/contexts fail rather than inventing another transport.
+
+`cache invalidate` requires at least one positive numeric SQLA dataset ID; repeat
+`--dataset`, duplicates are removed. UUIDs and implicit all-dataset targets are
+not supported. IDs map to `<ID>__table` datasource UIDs, not dataset UUIDs. The
+target OpenAPI must support `POST /api/v1/cachekey/invalidate` with string
+`datasource_uids`; configured auth, CSRF, and server `CacheRestApi` invalidate
+permissions apply. No service users, keys, or configuration are created.
+
+**External prerequisites:** `STORE_CACHE_KEYS_IN_METADATA_DB=True`, tracked keys,
+and compatible cache/data-cache backend, database, and key-prefix configuration.
+Existing untracked entries are not indexed retroactively. Superset 6.1.0 deletes
+through `cache_manager.cache` while chart results use `data_cache`; an incompatible
+setup can remove tracking metadata and return 201 without evicting chart results.
+The endpoint can also log incomplete deletion yet return success. JSON therefore
+reports `{dataset_ids, datasource_uids, accepted, eviction_verified, response}`,
+with `eviction_verified=false`, never invented deletion counts. Human output says
+request accepted, **not verified eviction**.
+
+A network failure leaves the outcome unknown; inspect server state before an
+explicit rerun. Sent invalidations never replay automatically. Even a retry's
+success cannot prove eviction after tracking records disappeared. Live acceptance
+requires an explicitly authorized isolated instance: pre-cache multiple filter
+combinations plus an unrelated dataset, invalidate only targets, and verify normal
+non-forced rendered requests stop reusing old target results while unrelated
+cache/session/Celery state stays intact. That live check has not been run. No
+Redis flush or fallback is provided. See [ADR 0024](docs/decisions/0024-targeted-cache-controls.md).
 
 ### Read-only ZIP exports
 
