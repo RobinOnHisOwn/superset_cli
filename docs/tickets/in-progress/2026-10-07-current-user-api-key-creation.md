@@ -1,36 +1,33 @@
-# Create current-user API keys with verified 1Password delivery
+# Create current-user API keys with explicit pipeline output
 
 - Status: in-progress
-- Implementation: local guarded CLI, captured 1Password adapter, original-caller reconciliation/rollback and regression tests implemented. See [plan](../../plans/2026-10-07-current-user-key-creation.md).
-- Acceptance gate: no authorized disposable vault/Superset target supplied; live delivery and key rejection remain unverified. Do not close or release based on mocks alone.
 - Priority: high
 - Type: code
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [lifecycle](../in-progress/2026-10-07-api-key-lifecycle.md), [service-user issuance](../todo/2026-10-07-secret-safe-key-issuance.md), [backend integration](../todo/2026-10-07-service-key-provisioning-integration.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
+- Scope correction: PR 11 delegates storage to the caller; mandatory 1Password handling in the initial PR 12 change is superseded.
+- Related: [plan](../../plans/2026-10-08-pr12-pipeline-issuance.md), [ADR 0025](../../decisions/0025-current-user-api-key-creation.md), [lifecycle](2026-10-07-api-key-lifecycle.md), [service-user output](../todo/2026-10-07-secret-safe-key-issuance.md)
 
 ## Context
 
-Split the remaining current-user create command from the lifecycle ticket. Native FAB creates for the authenticated caller, not an arbitrary service user; that narrower workflow does not require a cross-user backend adapter. Service-account deployment/provisioning remains separate.
+Native FAB creates only for the authenticated user. This narrower path neither provisions service users nor bypasses the service backend/independent recovery prerequisites. Use existing authorized caller credentials and owner-scoped native metadata.
 
 ## Selected scope
 
-`auth api-key create INSTANCE --name NAME --expires-on ISO --operation-id UUID --server-timezone IANA --op-account ACCOUNT --op-vault VAULT --allow-write [--json]`
+`auth api-key create INSTANCE --name NAME --expires-on ISO --operation-id UUID --server-timezone IANA --allow-write --secret-output`
 
-No plaintext output/file sink, cross-user targeting, rotation, or automatic creation retry. Use a dedicated API Credential item, create/read/edit a non-secret placeholder before key issuance to verify destination permissions, then deliver via captured stdin JSON and verify item/key metadata and secret read-back. The existing caller credential survives revocation of the new key. Require list/create/get/revoke permissions before issuance and a unique operator-supplied operation UUID for lost-response reconciliation.
+Both opt-ins are required before access. Default and JSON invocations remain secret-free; --json cannot accompany secret mode. Verify active identity/lifecycle grants before issuing and owner-scoped read-back plus unchanged identity before emitting. Explicit successful stdout contains only the key and newline; stderr contains safe recovery metadata. The shell owns storage and pipeline status checking. No 1Password dependency, files, raw-key arguments, environment propagation, cross-user target or scopes authorization.
 
 ## Definition of done
 
-- [x] Plan and source-verified native Superset/FAB and installed 1Password contracts.
-- [x] Failing tests before implementation; callback write guard before credentials, subprocesses or network. Optional-instance parsing may read non-secret config before the callback.
-- [x] Validate name, UUID, explicit destination and future timezone-aware expiry before access.
-- [x] Verify caller lifecycle permissions and destination create/read/edit capabilities before issuance.
-- [x] Deliver only through stdin JSON; capture subprocess output; expose only UUID/operation/item/vault identifiers and stored-state results.
-- [x] Reconcile lost create responses by operation marker, never blindly replay POST; compensate delivery failures using the surviving caller and verify revocation. Explicitly report unknown cleanup.
-- [x] Test dummy-secret leak sentinels, HTTP/process failures, malformed responses, timeouts, interruptions, expiry, missing guard, existing operation and no mutation replay.
-- [x] Update README, architecture and decisions; 91 focused tests and 1,085 full tests passed on both supported Python versions (13 skipped each); color/no-color help, manual no-write guard smoke, build and isolated wheel/sdist help checks passed. See plan for evidence and remaining CI/live gates.
-- [ ] Before release, authorized disposable-vault/Superset end-to-end acceptance. Do not claim local mocks prove live delivery or key rejection.
+- [x] Current requirements researched and source-verified; written correction plan and failing tests.
+- [x] Literal write/secret guards, TLS and option validation before credential access.
+- [x] Verify active identity/grants, before-image, native owner-only GET, identity continuity and stored expiry before output.
+- [x] Empty failed/default stdout; explicit successful secret-only output, safe stderr and unchanged auth bindings.
+- [x] Attempt verified compensation on HTTP/validation/output failure, partial writes, broken pipes and caught interruption; no mutation replay or downstream storage claim.
+- [x] 128 focused tests and 1,072 full tests passed on both supported Python versions (13 skipped each); color/no-color help, manual guard, build/packages and documentation checks recorded in the plan. Read-only conflict preview is clean.
+- [ ] Authorized isolated Superset ownership/expiry/rejection acceptance. No target supplied; do not close or release based on mocks alone.
 
 ## Decision follow-up
 
-Decision record update required: current-user secret-delivery, preflight, expiry and recovery contract in `docs/decisions/0025-current-user-api-key-creation.md`; revise ADR 0023's no-issuance boundary.
+Decision record update required: ADRs 0010, 0023 and replacement 0025; keep service-user research, output and acceptance gates separate.

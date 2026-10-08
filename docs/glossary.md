@@ -70,10 +70,16 @@ The CLI browser-cookie bundle saved to `storage-state.json` for later API access
 
 ## Key issuance operation marker
 
-An operator-supplied UUID embedded in a current-user key's name and dedicated
-1Password item to reconcile an ambiguous creation attempt. It is not backend
-idempotency or a uniqueness constraint; never share it concurrently or generate
-a fresh marker to blindly retry an unknown outcome.
+A unique operator UUID embedded in a current-user key name for reconciliation
+of an ambiguous create. It is correlation, not backend idempotency or a uniqueness
+constraint. Never share it concurrently or generate a fresh one to blindly retry.
+
+## Secret output
+
+The separate `--secret-output` opt-in for current-user creation. Stdout contains
+only the verified one-time key plus newline; recovery metadata goes to stderr.
+Emission does not prove downstream receipt or storage. The caller owns its sink
+and pipeline status checking.
 
 ## Ticket lifecycle
 

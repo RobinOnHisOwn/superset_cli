@@ -12,7 +12,7 @@ API-key authentication is version/configuration dependent. Earlier research exam
 
 Add explicit per-instance API-key mode with only an environment-variable binding and configured prefix (default `sst_`). `auth api-key set` requires syntactically valid credentials and successful read-only `/api/v1/me/` authentication before saving the binding. Reject redirects and preserve old config on failed validation. `clear` returns to cookie mode and preserves existing cookie/JWT files. Explicit `set` replaces prior auth bindings, and `clear` does not restore previous JWT bindings or mode; switching back requires explicit JWT configuration.
 
-Use a shared CLI client factory for every API-backed handler. Read the key afresh per invocation, enforce bearer syntax and prefix, require HTTPS except loopback HTTP, and reject embedded URL credentials. No auth file is needed or created. Never persist/log the key, fall back to cookies/JWT, retry a sent mutation, issue keys outside ADR 0025's guarded current-user delivery path, or change server flags/dependencies. Existing CSRF handling, HTTP timeouts, and literal per-invocation `--allow-write` apply unchanged.
+Use a shared CLI client factory for every API-backed handler. Read the key afresh per invocation, enforce bearer syntax and prefix, require HTTPS except loopback HTTP, and reject embedded URL credentials. No auth file is needed or created. Never persist/log the key, fall back to cookies/JWT, retry a sent mutation, issue keys outside ADR 0025's explicitly opted-in current-user pipeline path, or change server flags/dependencies. Existing CSRF handling, HTTP timeouts, and literal per-invocation `--allow-write` apply unchanged.
 
 Document the verified combination as Superset 6.1.0 + FAB 5.2.2 with `FAB_API_KEY_ENABLED=True`, initialized key storage, matching prefix, active issued key, and sufficient RBAC. Do not infer capability from the Superset version alone or from Next documentation. CLI binding validation, not a hardcoded version guess, determines acceptance on a target deployment.
 
@@ -37,12 +37,15 @@ matching UUID, `active=false` and a parseable revocation timestamp on GET. HTTP
 ambiguous transport outcomes are non-success, with UUID-only recovery guidance.
 Use an independent authorized same-user credential to reconcile before retrying.
 Stored-state verification does not claim separately observed key rejection.
-The runtime cache role receives no lifecycle grants. Current-user creation now uses [ADR 0025](0025-current-user-api-key-creation.md)'s verified-destination preflight and original-caller compensation. Cross-user provisioning remains blocked on the external integration.
+The runtime cache role receives no lifecycle grants. Current-user creation uses
+[ADR 0025](0025-current-user-api-key-creation.md)'s separate explicit pipeline output
+and original-caller compensation. The caller owns downstream storage. Cross-user
+service provisioning remains blocked on the independently authorized backend/operator contract.
 Tests: `tests/test_api_key_lifecycle.py`.
 
 ## Consequences
 
-Operators can use issued keys without browser-cookie extraction or local secret files. The environment must be populated on each invocation. Cross-user key provisioning and rollout remain operator responsibilities; current-user creation and revocation have explicitly guarded CLI paths. GET authentication may update server-side key usage bookkeeping; the CLI performs key-management mutations only through explicit guarded creation and revocation.
+Operators can use issued keys without browser-cookie extraction or local secret files. The environment must be populated on each invocation. Cross-user key provisioning and rollout remain operator responsibilities; current-user creation and revocation have explicitly guarded CLI paths. GET authentication may update server-side key usage bookkeeping; the CLI performs key-management mutations only through explicitly guarded creation and revocation.
 
 ## Alternatives considered
 

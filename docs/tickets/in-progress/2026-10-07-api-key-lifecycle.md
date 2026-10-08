@@ -2,7 +2,7 @@
 
 - Status: in-progress
 - Progress (2026-10-07): current-user list/get/revoke implemented with metadata-only output, UUID validation, pre-auth write guard, CSRF, stored-state verification and no mutation replay. See [implementation plan](../../plans/2026-10-07-open-key-todos.md).
-- Creation split: [current-user create implementation](2026-10-07-current-user-api-key-creation.md) uses original-caller recovery and explicit 1Password delivery. Cross-user service provisioning remains blocked on the backend integration. Disposable-vault/Superset acceptance and live revocation/rejection validation are still unverified; this ticket is not complete.
+- Creation split: [current-user pipeline output](2026-10-07-current-user-api-key-creation.md) implements the current caller-owned storage scope. Cross-user provisioning and independent operator recovery remain separate backend prerequisites. No authorized isolated live ownership/expiry/rejection acceptance was supplied; this ticket is not complete.
 - Priority: high
 - Type: code
 - Created by: agent
@@ -11,7 +11,7 @@
 
 ## Context
 
-`auth api-key set/clear` validates/manages a local environment binding; it does not create or revoke server keys. Add server lifecycle support without exposing issued secrets. Creation must ship with safe delivery, not an intermediate command that prints a key.
+`auth api-key set/clear` validates/manages a local environment binding; it does not create or revoke server keys. Default lifecycle output remains secret-free. Current-user creation uses separate explicit write/secret opt-ins; the shell owns storage and pipeline checks, and the CLI never claims downstream delivery.
 
 ## Verified knowledge
 
@@ -34,8 +34,8 @@ Reuse `_client`, `_require_allow_write`, and shared CSRF transport. Never retry 
 
 - [x] Approve command names and human/JSON contracts; preserve local set/clear semantics. Write an implementation plan and failing tests first.
 - [x] Implement current-user list/get metadata and guarded revoke using verified endpoint schemas and permission names. Do not assume generic list pagination applies.
-- [ ] Require literal `--allow-write` before credential loading/network access for create/revoke; include the existing dry-run help wording.
-- [ ] Ship create only with the safe-issuance ticket's verified sink/recovery workflow. Human and JSON output must never contain plaintext keys.
+- [x] Require literal `--allow-write` before callback credential/network access for create/revoke; include the existing dry-run help wording.
+- [x] Split current-user create into its focused ticket with separate explicit secret output, original-caller compensation and caller-owned storage. Default human/JSON output remains secret-free; cross-user service issuance is not closed by this implementation.
 - [x] Do not add `--user` targeting to native endpoints. Cross-user support remains blocked on the authorized backend integration.
 - [ ] Test current-user scope, foreign/missing UUIDs, malformed create/expiry, missing opt-in, 401/403/404/500, failed manager revocation, lost responses, self-revocation, and no mutation replay.
 - [ ] Verify effective revocation; report ambiguous or unverifiable results as non-success. Metadata discovery must not emit credentials or hashes.

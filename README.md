@@ -59,7 +59,7 @@ superset-cli --help
 
 Upgrade with `uv tool upgrade superset-cli`. Python 3.12 or newer is required;
 uv can provision Python when needed. `pipx install superset-cli` is an alternative.
-PyPI `0.1.0` was verified on 2026-10-06: its wheel includes the API command, CSRF handling, validated cookie-import fallback, and `--clear-query-context`, but no `--version` flag. A local installation also labeled `0.1.0` lacked those capabilities; version labels alone are insufficient. PyPI **0.2.0** was rechecked on 2026-10-07 and includes `--version`, owners, CSRF handling, and Playwright export. This checkout builds distinct unpublished **0.3.0** artifacts with the new cache controls. An isolated upgrade from 0.1.0 through 0.2.0 to the built 0.3.0 wheel preserved synthetic config/auth files; no publication was performed.
+PyPI `0.1.0` was verified on 2026-10-06: its wheel includes the API command, CSRF handling, validated cookie-import fallback, and `--clear-query-context`, but no `--version` flag. A local installation also labeled `0.1.0` lacked those capabilities; version labels alone are insufficient. PyPI **0.2.0** was rechecked on 2026-10-07 and includes `--version`, owners, CSRF handling, and Playwright export. Release **0.3.0** added the new cache controls. This checkout prepares **0.3.1** with the subsequent merged maintenance changes; version preparation does not imply publication. An isolated upgrade from 0.1.0 through 0.2.0 to the built 0.3.0 wheel preserved synthetic config/auth files; no publication was performed.
 
 Check `command -v superset-cli`, then its installation owner (`uv tool list` or `pipx list`). If it is installed but missing from PATH, use `uv tool update-shell` or `pipx ensurepath` rather than installing another copy. Upgrade with the same tool (`uv tool upgrade superset-cli` or `pipx upgrade superset-cli`). Config/auth files remain separate from the package installation. Check `api --help` and `charts update --help` once per session for required capabilities; use `--version` when available. Inside this source checkout, select `uv run superset-cli` explicitly.
 
@@ -200,7 +200,7 @@ superset-cli auth api-key clear prod --json
 
 `set` verifies a read-only `/api/v1/me/` request before saving the binding. Use
 `--prefix` if the server's configured prefix differs from `sst_`. The CLI does not
-enable server flags or upgrade server dependencies; guarded current-user creation is described below. Unsupported
+enable server flags or upgrade server dependencies; explicit current-user issuance is described below. Unsupported
 or rejected authentication fails without saving a binding or browser/JWT fallback.
 Keys are reread from the environment per invocation and never saved in auth files.
 HTTPS is required except loopback HTTP development; redirects and embedded URL
@@ -239,60 +239,51 @@ Revoke requires literal `--allow-write` before credential/network access. HTTP
 not a separately tested live request rejection. Timeouts, failed read-back
 (including self-revocation), or missing evidence exit non-zero as **unverified**.
 Reconcile using an independent authorized credential before retrying; the key
-may already be revoked. Mutations are never replayed. Current-user creation uses the guarded 1Password workflow below; no plaintext
-issuance or guessed cross-user integration is exposed. Local `set`/`clear`
-binding behavior is unchanged.
+may already be revoked. Mutations are never replayed. Current-user creation uses
+separate explicit pipeline output below; cross-user service provisioning remains
+blocked on its backend contract. Local `set`/`clear` behavior is unchanged.
 
-### Create a current-user API key
+### Explicit current-user key issuance
 
-```bash
-uv run superset-cli auth api-key create --help
-```
+`auth api-key create` requires an already authenticated caller and explicit
+`--name`, `--expires-on`, `--operation-id`, `--server-timezone`, `--allow-write`
+and `--secret-output`. Without both opt-ins it refuses issuance. `--json` never
+grants secret access and cannot accompany secret mode. Default output and all
+errors are secret-free; successful secret-mode stdout is only the one-time key
+plus newline. Recovery metadata goes to stderr, never mixed into the key stream.
 
-`auth api-key create` requires the instance and `--name`, `--expires-on`,
-`--operation-id`, `--server-timezone`, `--op-account`, `--op-vault`, and literal
-`--allow-write`. Use an already authenticated provisioning identity belonging
-to the intended user. Native FAB cannot target another user. The four
-`can_list/create/get/revoke` grants on `ApiKey`, CSRF read access, an active caller
-and working `/me/roles/` metadata are required; do not grant these to cache-runtime callers.
+Native FAB creates only for the current user; there is no `--user`. Require active
+caller identity and `can_list/create/get/revoke` on `ApiKey`, CSRF read access and
+working `/me/roles/`. Owner-only GET and unchanged identity must verify the new
+key before output. Do not give lifecycle permissions to runtime cache callers.
 
-Expiry input must be timezone-aware ISO, future and within 90 days. FAB 5.2.2
-stores naive timestamps and compares them with the server's local clock.
-`--server-timezone` must be the independently verified server IANA clock timezone:
-never assume UTC. The CLI converts the input instant to that wall time and rejects
-ambiguous DST folds. Read-back must confirm the exact stored expiry. `--prefix`
-selects the expected server prefix (default `sst_`); stored scopes are not authorization.
+Expiry input must be timezone-aware, future and within 90 days. FAB 5.2.2 stores
+naive timestamps and compares with its local clock: independently verify the
+server IANA timezone for `--server-timezone`, never assume UTC. The CLI converts
+to that wall time, rejects DST folds and checks stored expiry. `--prefix` selects
+the expected prefix (default `sst_`); stored scopes are not authorization.
 
-Initially supports the inspected **1Password CLI 2.33.1**. Account/vault selection
-is mandatory. Before issuing a key, create/read/edit a new non-secret placeholder
-to verify destination permissions. Then deliver to its immutable item/vault IDs
-through captured stdin JSON, and read back with reveal plus cache disabled to
-verify the concealed credential, key UUID, caller and instance metadata. No key
-is printed, written to a plaintext file, passed in argv, or added to the process
-environment. Existing local auth bindings are not replaced. Python does not
-guarantee memory zeroization.
+The shell/caller owns storage and pipeline checks. Enable `set -o pipefail` in
+Bash/Zsh and check the entire pipeline's exit status. Feed the explicit secret
+stream directly to your chosen secure receiver's stdin; do not capture it in
+argv, temporary files, command tracing or diagnostic logs. No 1Password
+subprocesses, vault handling or destination verification are built into the CLI.
+A successful write/flush does **not** prove receipt, storage or durability.
 
-`--operation-id` is a new unique UUID for a new operation, embedded in the server
-key name and dedicated item title. Do not share it concurrently, regenerate it
-following failure, or blindly rerun a timed-out invocation. Existing server
-markers are refused, but native names are **not** backend idempotency guarantees:
-a late request may complete after reconciliation. Inspect current-user key
-metadata and the 1Password marker with a surviving credential before recovery.
+Use a fresh unique operation UUID for each new attempt. Never share it
+concurrently, blindly regenerate it after failure, or replay a timed-out create:
+names are correlation markers, not backend idempotency. Inspect current-user
+metadata with a surviving credential before recovery. Output failures, short
+writes, broken pipes and caught interruptions attempt verified revocation with
+the original caller. A receiver can fail after reading the complete key without
+the CLI noticing; independently revoke/reconcile when the pipeline fails.
+Unknown issuance/cleanup exits non-zero with safe operation/UUID identifiers.
 
-If delivery fails, attempt owner-scoped reconciliation and verified revocation
-using the original caller. Unknown issuance, multiple matches, interruptions or
-cleanup failure remain non-success with recovery IDs; an uncatchable process
-termination can prevent rollback. Placeholder/item deletion is best-effort and
-reported as requested, not proven. No atomicity spans Superset and 1Password.
-
-Successful `--json` output contains only `operation_id`, `key_uuid`, `item_id`,
-`vault_id`, `stored`, `revocation_verified`, `outcome`, and `item_cleanup`.
-Workflow failures return the same safe recovery fields and exit non-zero;
-argument/config/auth preflight errors keep existing CLI conventions. Human
-success reports UUID/item/vault only. Creation success verifies stored state
-and delivery, not observed authentication with the new key. Live disposable-vault
-and Superset release acceptance remains unverified. See
-[ADR 0025](docs/decisions/0025-current-user-api-key-creation.md).
+New keys never replace local auth bindings or enter subprocess environments or
+local files. Python cannot guarantee memory zeroization, and uncatchable
+termination can prevent rollback. Live isolated ownership/expiry/rejection
+acceptance remains unverified. See [ADR 0025](docs/decisions/0025-current-user-api-key-creation.md)
+and `superset-cli auth api-key create --help` for the full invocation.
 
 ## Resource list controls
 
