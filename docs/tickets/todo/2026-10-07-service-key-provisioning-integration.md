@@ -1,49 +1,33 @@
-# Select an authorized service-account key provisioning integration
+# Determine supported service-user key administration or document operator fallback
 
 - Status: todo
-- Blocker review (2026-10-07): no owning backend repository or deployed authorized cross-user interface was supplied. Native FAB remains current-user only; selecting a fictitious integration would violate the prerequisites. Supply the backend repository and its authorization/reconciliation contract before implementation. See [review plan](../../plans/2026-10-07-open-key-todos.md).
 - Priority: high
 - Type: research
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [research plan](../../plans/2026-10-07-api-key-lifecycle-ticket-research.md), [lifecycle](../in-progress/2026-10-07-api-key-lifecycle.md), [safe issuance](2026-10-07-secret-safe-key-issuance.md), [service role](2026-10-07-minimal-cache-service-role.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
+- Related: [service role](2026-10-07-minimal-cache-service-role.md), [secret output](2026-10-07-secret-safe-key-issuance.md), [acceptance](2026-10-08-service-account-isolated-acceptance.md), [current-user lifecycle](../in-progress/2026-10-07-api-key-lifecycle.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
 
 ## Context
 
-SAML and a minimal runtime role do not supply an authenticated service-user session for self-service key creation. FAB 5.2.2's `/api/v1/security/api_keys/` endpoints operate exclusively on the authenticated user. An administrator cannot target another user by adding `--user`.
+Automation needs a dedicated `svc_cache_invalidator` identity, not a human administrator's key. Reuse existing authentication, user/role CRUD, invalidation, and current-user key list/get/revoke.
 
-This ticket records an external deployment prerequisite. Keep deployment details and implementations in the owning backend repository; public documentation must use neutral examples.
+Verified baseline supplied with the task: Superset 6.1.0 / Flask-AppBuilder 5.2.2 native key creation binds to the authenticated user; list/get/revoke are owner-only, including for administrators. A key name or CLI `--user` option cannot change ownership. The security manager supports `create_api_key(user=service_user, name="cache-invalidation")` and `revoke_api_key(key_uuid)`; this is not evidence of a supported privileged REST endpoint.
 
-## Verified knowledge
-
-- POST calls `sm.create_api_key(user=sm.current_user, ...)`; list filters by current user ID. Get/revoke check ownership and return 404 for a different owner.
-- POST schema accepts required `name`, optional `scopes` string and optional ISO datetime `expires_on`. There is no user parameter.
-- SQLA manager `create_api_key(user, name, scopes=None, expires_on=None)` generates and hashes the key, commits storage, and returns plaintext once. `revoke_api_key(uuid)` returns a boolean. Internal methods require an authorization wrapper before cross-user use.
-- Registration requires `FAB_API_KEY_ENABLED`; prefix defaults to `sst_`. Verify installed versions, migration/key-table readiness, and configuration on the deployment.
-- Stored scopes are not enforced by `validate_api_key`; they are not dataset authorization.
-
-## Options to investigate
-
-1. Prefer an existing authorized backend operational integration if available: call manager methods in Superset's application context with explicit target-user authorization.
-2. Otherwise evaluate a narrow backend extension for provision/revoke/reconcile, separate from the runtime service role.
-3. Self-service endpoints are usable only if an independently authorized service-user authentication path exists. Do not assume SAML provides one, add a password fallback, or impersonate a user through CLI flags.
+Unknown: whether a supported, separately authorized backend integration exists in the target deployment. No live target or mutation authorization is provided by this ticket.
 
 ## Definition of done
 
-- [ ] Inspect the actual deployment and existing operational integration; document verified capabilities and missing prerequisites, without secrets or real instance details.
-- [ ] Select the smallest authorized option and record its trust boundary in a backend ADR. Specify who may issue/revoke for which users; do not grant runtime callers provisioning privileges.
-- [ ] Define request/response metadata, key UUID/owner reporting, expiry policy, audit records without secret values, and a secret-safe delivery channel to the issuance workflow.
-- [ ] Provide independently authenticated revocation and metadata reconciliation for failed delivery, lost responses, and partially completed operations. A timed-out create must not be blindly repeated.
-- [ ] Verify target user existence/activity, version/configuration and storage prerequisites before issuance; test unauthorized cross-user requests and invalid targets.
-- [ ] Verify effective revocation from stored state and, where authorized, key rejection. Do not rely on native revoke HTTP 200 alone.
-- [ ] Hand the verified integration contract to the safe-issuance ticket. No CLI `--user` promise until such an integration exists.
+- [ ] Research version-pinned upstream documentation/source and the owning deployment's integration contract; record evidence distinguishing supported extension points from internal methods.
+- [ ] Choose a supported privileged issuance/revocation integration only if its ownership, authorization, audit, and reconciliation contracts are verified. Keep backend implementation in its owning repository.
+- [ ] If none exists, document operator-side bootstrap and revocation using the security manager in an authorized application context. Do not invent REST operations or promise cross-user native CLI key management.
+- [ ] Document preflight checks for exact user identity/activity, complete role permissions, key ownership (for existing keys), versions, API-key enablement/storage, and independent operator recovery access. Reject unexpected privilege drift before any mutation; verify newly issued ownership before delivery.
+- [ ] Require literal per-invocation `--allow-write` for every remote mutation in the selected CLI/operator workflow; no config/env/prompt override. Runtime identity receives no key-management permissions.
+- [ ] Specify non-secret owner/UUID metadata and reconciliation for lost responses. Never automatically retry a sent mutation; uncertain outcomes are non-success with explicit operator guidance.
+- [ ] Prove operator revocation without using the runtime credential or granting it lifecycle permissions; verify stored revocation and, on the authorized isolated instance, credential rejection.
+- [ ] Hand the verified integration or operator fallback to the secret-output and acceptance tickets. Write an implementation plan before code changes and record any durable authorization/recovery decision.
 
-## Sources
+## Notes
 
-- [FAB API](https://github.com/dpgaspar/Flask-AppBuilder/blob/v5.2.2/flask_appbuilder/security/sqla/apis/api_key/api.py)
-- [FAB schema](https://github.com/dpgaspar/Flask-AppBuilder/blob/v5.2.2/flask_appbuilder/security/sqla/apis/api_key/schema.py)
-- [FAB SQLA manager](https://github.com/dpgaspar/Flask-AppBuilder/blob/v5.2.2/flask_appbuilder/security/sqla/manager.py)
+Scope excludes 1Password integration and dataset allowlists; both belong in the shell/caller. Public documentation uses neutral examples and never real credentials or instance data.
 
-## Decision follow-up
-
-Decision record update required: backend provisioning authorization and recovery design in the owning repository; review ADR 0023 before any CLI issuance support.
+Sources to verify: [FAB 5.2.2 API](https://github.com/dpgaspar/Flask-AppBuilder/blob/v5.2.2/flask_appbuilder/security/sqla/apis/api_key/api.py), [schemas](https://github.com/dpgaspar/Flask-AppBuilder/blob/v5.2.2/flask_appbuilder/security/sqla/apis/api_key/schema.py), [security manager](https://github.com/dpgaspar/Flask-AppBuilder/blob/v5.2.2/flask_appbuilder/security/sqla/manager.py).
