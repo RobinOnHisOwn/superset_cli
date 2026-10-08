@@ -2033,6 +2033,59 @@ def auth_api_key_revoke(
     _run_api_key_lifecycle(ctx, instance_name, state_dir, as_json, "revoke", key_uuid)
 
 
+@api_key_app.command("create")
+def auth_api_key_create(
+    ctx: typer.Context, instance_name: str,
+    name: Annotated[str, typer.Option("--name", help="Current-user key name, at most 180 characters.")],
+    expires_on: Annotated[str, typer.Option("--expires-on", help="Timezone-aware future ISO expiry within 90 days.")],
+    operation_id: Annotated[str, typer.Option("--operation-id", help="Unique attempt UUID; reconcile before retrying.")],
+    server_timezone: Annotated[str, typer.Option("--server-timezone", help="Independently verified server local-clock IANA timezone.")],
+    secret_output: Annotated[bool, typer.Option("--secret-output", help="Separate explicit opt-in: emit only the one-time key to stdout; metadata goes to stderr. Required for issuance.")] = False,
+    prefix: Annotated[str, typer.Option("--prefix", help="Expected server API-key prefix.")] = "sst_",
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """Create for the current user; storage and pipeline failure checks belong to the caller."""
+    import sys
+    from contextlib import redirect_stdout
+    with redirect_stdout(sys.stderr):
+        _require_allow_write(allow_write, action="create a current-user API key")
+    if not secret_output:
+        typer.echo("Issuance also requires --secret-output; the one-time key must not be silently discarded.", err=True)
+        raise typer.Exit(code=1)
+    if as_json:
+        raise typer.BadParameter("--json cannot be combined with --secret-output; stdout contains only the key.")
+    from superset_cli.key_issuance import creation_request, create_and_emit_key
+    from superset_cli.jwt_auth import require_jwt_tls
+    try:
+        body, operation_id = creation_request(name, expires_on, operation_id, prefix, server_timezone)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    with redirect_stdout(sys.stderr):
+        instance = _require_instance(ctx, instance_name)
+    payload = None
+    try:
+        require_jwt_tls(instance.base_url)
+        with redirect_stdout(sys.stderr):
+            state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+        with _client(instance=instance, storage_state_path=state_path) as client:
+            payload = create_and_emit_key(client, body=body, operation_id=operation_id,
+                                          prefix=prefix, server_timezone=server_timezone)
+    except typer.Exit:
+        raise
+    except (Exception, KeyboardInterrupt):
+        if payload is None:
+            payload = {"operation_id": operation_id, "key_uuid": None, "owner_id": None,
+                       "emitted": False, "revocation_verified": None, "outcome": "preflight_failed"}
+        else:
+            typer.echo("Outcome recorded before client shutdown failed; inspect the recovery identifiers.", err=True)
+    typer.echo(json.dumps(payload, separators=(",", ":")), err=True)
+    if not payload["emitted"]:
+        typer.echo("Issuance/output failed or is unverified; any delivery is uncertain. Reconcile the operation/key IDs using a surviving authorized credential before retrying. No mutation was replayed.", err=True)
+        raise typer.Exit(code=1)
+
+
 @cache_app.command("invalidate")
 def cache_invalidate(
     ctx: typer.Context,

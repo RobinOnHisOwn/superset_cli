@@ -200,7 +200,7 @@ superset-cli auth api-key clear prod --json
 
 `set` verifies a read-only `/api/v1/me/` request before saving the binding. Use
 `--prefix` if the server's configured prefix differs from `sst_`. The CLI does not
-issue keys, enable server flags, or upgrade server dependencies. Unsupported
+enable server flags or upgrade server dependencies; explicit current-user issuance is described below. Unsupported
 or rejected authentication fails without saving a binding or browser/JWT fallback.
 Keys are reread from the environment per invocation and never saved in auth files.
 HTTPS is required except loopback HTTP development; redirects and embedded URL
@@ -239,10 +239,51 @@ Revoke requires literal `--allow-write` before credential/network access. HTTP
 not a separately tested live request rejection. Timeouts, failed read-back
 (including self-revocation), or missing evidence exit non-zero as **unverified**.
 Reconcile using an independent authorized credential before retrying; the key
-may already be revoked. Mutations are never replayed. Creation remains blocked
-on verified secret-safe delivery and compensating revocation; no plaintext
-issuance or guessed cross-user integration is exposed. Local `set`/`clear`
-binding behavior is unchanged.
+may already be revoked. Mutations are never replayed. Current-user creation uses
+separate explicit pipeline output below; cross-user service provisioning remains
+blocked on its backend contract. Local `set`/`clear` behavior is unchanged.
+
+### Explicit current-user key issuance
+
+`auth api-key create` requires an already authenticated caller and explicit
+`--name`, `--expires-on`, `--operation-id`, `--server-timezone`, `--allow-write`
+and `--secret-output`. Without both opt-ins it refuses issuance. `--json` never
+grants secret access and cannot accompany secret mode. Default output and all
+errors are secret-free; successful secret-mode stdout is only the one-time key
+plus newline. Recovery metadata goes to stderr, never mixed into the key stream.
+
+Native FAB creates only for the current user; there is no `--user`. Require active
+caller identity and `can_list/create/get/revoke` on `ApiKey`, CSRF read access and
+working `/me/roles/`. Owner-only GET and unchanged identity must verify the new
+key before output. Do not give lifecycle permissions to runtime cache callers.
+
+Expiry input must be timezone-aware, future and within 90 days. FAB 5.2.2 stores
+naive timestamps and compares with its local clock: independently verify the
+server IANA timezone for `--server-timezone`, never assume UTC. The CLI converts
+to that wall time, rejects DST folds and checks stored expiry. `--prefix` selects
+the expected prefix (default `sst_`); stored scopes are not authorization.
+
+The shell/caller owns storage and pipeline checks. Enable `set -o pipefail` in
+Bash/Zsh and check the entire pipeline's exit status. Feed the explicit secret
+stream directly to your chosen secure receiver's stdin; do not capture it in
+argv, temporary files, command tracing or diagnostic logs. No 1Password
+subprocesses, vault handling or destination verification are built into the CLI.
+A successful write/flush does **not** prove receipt, storage or durability.
+
+Use a fresh unique operation UUID for each new attempt. Never share it
+concurrently, blindly regenerate it after failure, or replay a timed-out create:
+names are correlation markers, not backend idempotency. Inspect current-user
+metadata with a surviving credential before recovery. Output failures, short
+writes, broken pipes and caught interruptions attempt verified revocation with
+the original caller. A receiver can fail after reading the complete key without
+the CLI noticing; independently revoke/reconcile when the pipeline fails.
+Unknown issuance/cleanup exits non-zero with safe operation/UUID identifiers.
+
+New keys never replace local auth bindings or enter subprocess environments or
+local files. Python cannot guarantee memory zeroization, and uncatchable
+termination can prevent rollback. Live isolated ownership/expiry/rejection
+acceptance remains unverified. See [ADR 0025](docs/decisions/0025-current-user-api-key-creation.md)
+and `superset-cli auth api-key create --help` for the full invocation.
 
 ## Resource list controls
 

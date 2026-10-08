@@ -57,6 +57,8 @@ For a copyable starting point, use `../templates/decision-record-template.md`.
 
 ## Current decision records
 
+- [0025: Current-user key creation with explicit pipeline output](./0025-current-user-api-key-creation.md)
+
 - [0024: Targeted cache controls](./0024-targeted-cache-controls.md)
 
 - [0022: Explicit server-side list query controls](./0022-explicit-list-query-controls.md)

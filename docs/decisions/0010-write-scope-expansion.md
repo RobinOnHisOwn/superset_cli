@@ -27,6 +27,7 @@ Expand the product scope from read-only to "read by default, write opt-in." The 
 - **tags**: create, update, delete.
 - **themes**: create, update, delete.
 - **security**: roles create/update/delete; users create/update/delete; RLS rules create/update/delete.
+- **current-user API keys** (2026-10-08): guarded create with separate explicit pipeline output and revoke; see [ADR 0023](0023-environment-bound-api-keys.md) and [ADR 0025](0025-current-user-api-key-creation.md). No cross-user provisioning or secret-storage integration.
 - **import**: dashboard, chart, dataset, database, saved-query bundles via multipart upload.
 
 ### Safety contract
