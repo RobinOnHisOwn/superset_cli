@@ -2033,6 +2033,57 @@ def auth_api_key_revoke(
     _run_api_key_lifecycle(ctx, instance_name, state_dir, as_json, "revoke", key_uuid)
 
 
+@api_key_app.command("create")
+def auth_api_key_create(
+    ctx: typer.Context, instance_name: str,
+    name: Annotated[str, typer.Option("--name", help="Current-user key name, at most 180 characters.")],
+    expires_on: Annotated[str, typer.Option("--expires-on", help="Timezone-aware ISO expiry, future and within 90 days.")],
+    operation_id: Annotated[str, typer.Option("--operation-id", help="Unique UUID for this attempt; reconcile it before any retry.")],
+    server_timezone: Annotated[str, typer.Option("--server-timezone", help="Verified server local-clock IANA timezone; FAB stores naive expiry timestamps.")],
+    op_account: Annotated[str, typer.Option("--op-account", help="Explicit authenticated 1Password account.")],
+    op_vault: Annotated[str, typer.Option("--op-vault", help="Explicit 1Password destination vault.")],
+    prefix: Annotated[str, typer.Option("--prefix", help="Expected server API-key prefix.")] = "sst_",
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """Create a current-user key and verify 1Password delivery; never print the key."""
+    _require_allow_write(allow_write, action="create a current-user API key and its dedicated 1Password item")
+    from superset_cli.key_issuance import creation_request, create_and_store_key
+    try:
+        body, operation_id = creation_request(name, expires_on, operation_id, op_account, op_vault, prefix, server_timezone)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    instance = _require_instance(ctx, instance_name)
+    from superset_cli.jwt_auth import require_jwt_tls
+    payload = None
+    try:
+        require_jwt_tls(instance.base_url)
+        state_path = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+        with _client(instance=instance, storage_state_path=state_path) as client:
+            payload = create_and_store_key(client, body=body, operation_id=operation_id,
+                                           account=op_account, vault=op_vault, prefix=prefix,
+                                           server_timezone=server_timezone)
+    except typer.Exit:
+        raise
+    except (Exception, KeyboardInterrupt):
+        if payload is None:
+            payload = {"operation_id": operation_id, "key_uuid": None, "item_id": None,
+                       "vault_id": None, "stored": False, "revocation_verified": None,
+                       "outcome": "preflight_failed", "item_cleanup": "not_needed"}
+        else:
+            typer.echo("Workflow outcome was recorded before client shutdown failed; see the result identifiers.", err=True)
+    if as_json:
+        typer.echo(json.dumps(payload, separators=(",", ":")))
+    elif payload["stored"]:
+        typer.echo(f"Created API key {payload['key_uuid']}; verified 1Password item {payload['item_id']} in vault {payload['vault_id']}.")
+    else:
+        typer.echo(json.dumps(payload, separators=(",", ":")))
+    if not payload["stored"]:
+        typer.echo("Creation failed or is unverified. Check HTTPS (or loopback HTTP), caller permissions, op 2.33.1 and destination access; reconcile the operation and any key/item IDs before retrying. No mutation was replayed.", err=True)
+        raise typer.Exit(code=1)
+
+
 @cache_app.command("invalidate")
 def cache_invalidate(
     ctx: typer.Context,

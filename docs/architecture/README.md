@@ -71,8 +71,20 @@ read. Tests: `tests/test_api_key_auth.py`. Verified version/configuration limits
 and the revoke write guard precede credential access. Client metadata projection
 excludes extra fields; revoke preflights get, uses shared DELETE/CSRF once, and
 checks matching inactive/revoked metadata on read-back. Unverifiable outcomes
-exit non-zero without forwarding server diagnostics. No create or cross-user
-provisioning path exists. Tests: `tests/test_api_key_lifecycle.py`.
+exit non-zero without forwarding server diagnostics. No cross-user provisioning path exists. Tests: `tests/test_api_key_lifecycle.py`.
+
+`auth api-key create` maps to `cli.py::auth_api_key_create` and
+`key_issuance.py::creation_request/create_and_store_key`. Its write guard and
+option validation precede access. The issuance module uses effective role pairs,
+existing owner-scoped list/get/revoke and shared POST/CSRF, plus captured stdlib
+subprocess calls to the inspected 1Password CLI. It preflights a new placeholder
+item, converts absolute expiry to an explicitly verified server clock timezone,
+verifies secret/UUID/destination read-back with cache disabled, and compensates
+failed or ambiguous delivery without mutation replay. Shared `api_key_auth.py`
+syntax validation applies to bound and newly issued values. Only recovery IDs
+reach output; no newly issued key/auth binding is persisted locally. Tests:
+`tests/test_api_key_creation.py`. Live release acceptance and cross-user recovery
+remain separate gates; see [ADR 0025](../decisions/0025-current-user-api-key-creation.md).
 
 ## Cache control entry points
 
@@ -116,7 +128,8 @@ write guards, and unknown mutation outcomes. See [ADR 0021](../decisions/0021-pe
 - `src/superset_cli/jwt_auth.py` — DB/LDAP login/refresh, private separate token state, display-only expiry metadata
 - `src/superset_cli/instance_selection.py` — default precedence and Typer command arity adapter
 - `src/superset_cli/client.py` — cookie/JWT/API-key transport, bounded GET-only JWT refresh, CSRF-protected API access, checked list traversal
-- `src/superset_cli/api_key_auth.py` — environment-only API-key validation; no state file or key-management API
+- `src/superset_cli/api_key_auth.py` — shared API-key syntax validation and environment binding reads; no state file
+- `src/superset_cli/key_issuance.py` — current-user secret-safe 1Password delivery, expiry validation, metadata reconciliation and verified rollback
 - `scripts/verify_dashboard.py` — optional Playwright rendered-content/tab/screenshot verification (not part of core dependencies)
 - `tests/` — pytest coverage grouped by command area and helper module
 - `docs/plans/` — plans and temporary implementation reasoning

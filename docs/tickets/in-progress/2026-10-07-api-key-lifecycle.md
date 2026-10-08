@@ -2,7 +2,7 @@
 
 - Status: in-progress
 - Progress (2026-10-07): current-user list/get/revoke implemented with metadata-only output, UUID validation, pre-auth write guard, CSRF, stored-state verification and no mutation replay. See [implementation plan](../../plans/2026-10-07-open-key-todos.md).
-- Blocked: create requires a verified secret sink and independently authenticated recovery integration; no backend or disposable authorized vault supplied. No live revocation/rejection validation performed. This ticket is not complete.
+- Creation split: [current-user create implementation](2026-10-07-current-user-api-key-creation.md) uses original-caller recovery and explicit 1Password delivery. Cross-user service provisioning remains blocked on the backend integration. Disposable-vault/Superset acceptance and live revocation/rejection validation are still unverified; this ticket is not complete.
 - Priority: high
 - Type: code
 - Created by: agent

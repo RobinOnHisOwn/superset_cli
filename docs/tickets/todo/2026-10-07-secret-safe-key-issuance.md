@@ -10,6 +10,8 @@
 
 ## Context
 
+The narrower [current-user creation ticket](../in-progress/2026-10-07-current-user-api-key-creation.md) implements delivery and original-caller compensation using native endpoints. This service-user workflow still requires the authorized backend integration and its stronger recovery contract; local current-user tests do not close this ticket.
+
 An issued plaintext key is returned once by FAB. Move it directly into 1Password without terminal output, plaintext files, shell history, or process arguments. Creation is incomplete until storage is verified. On failure, revoke and verify cleanup; do not leave an unreported usable key.
 
 ## Verified knowledge

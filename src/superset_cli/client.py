@@ -234,6 +234,8 @@ class SupersetClient:
         self._csrf_token: str | None = None
 
     def _request_response(self, method: str, path: str, **kwargs) -> httpx.Response:
+        if method != "GET":
+            kwargs["follow_redirects"] = False
         response = self.http.request(method, path, **kwargs)
         if response.status_code == 401 and self.jwt_mode and method == "GET":
             try:
@@ -297,15 +299,15 @@ class SupersetClient:
         return {"X-CSRFToken": self._csrf_token, "Referer": f"{self.base_url}/"}
 
     def _post(self, path: str, *, json_body: dict | None = None, files: dict | None = None, data: dict | None = None) -> dict:
-        response = self.http.post(path, json=json_body, files=files, data=data, headers=self._write_headers())
+        response = self._request_response("POST", path, json=json_body, files=files, data=data, headers=self._write_headers())
         return self._handle_response(response, path=path)
 
     def _put(self, path: str, *, json_body: dict | None = None) -> dict:
-        response = self.http.put(path, json=json_body, headers=self._write_headers())
+        response = self._request_response("PUT", path, json=json_body, headers=self._write_headers())
         return self._handle_response(response, path=path)
 
     def _delete(self, path: str) -> dict:
-        response = self.http.delete(path, headers=self._write_headers())
+        response = self._request_response("DELETE", path, headers=self._write_headers())
         return self._handle_response(response, path=path)
 
     def _handle_response(self, response: httpx.Response, *, path: str) -> dict:

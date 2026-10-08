@@ -9,6 +9,26 @@ from superset_cli.client import AuthExpiredError, NotFoundError, SupersetClient,
 from fakes import FakeSupersetClient
 
 
+@pytest.mark.parametrize("method,args,verb", [
+    ("create_chart", ({"slice_name": "Example"},), "POST"),
+    ("update_chart", ("1", {}), "PUT"),
+    ("delete_chart", ("1",), "DELETE"),
+])
+def test_shared_write_transport_never_replays_redirects(monkeypatch, instance_setup_with_session, method, args, verb):
+    original = httpx.Client
+    writes = []
+    def handler(request):
+        if request.url.path.endswith("csrf_token/"):
+            return httpx.Response(200, json={"result": "csrf"})
+        writes.append(request)
+        return httpx.Response(307, headers={"Location": "/api/v1/chart/1"})
+    monkeypatch.setattr(httpx, "Client", lambda **kw: original(**kw, transport=httpx.MockTransport(handler)))
+    with SupersetClient(base_url="https://superset.example.com", storage_state_path=instance_setup_with_session[2]) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            getattr(client, method)(*args)
+    assert len(writes) == 1 and writes[0].method == verb
+
+
 def test_load_storage_state_reads_cookies(tmp_path: Path) -> None:
     path = tmp_path / "storage-state.json"
     path.write_text(

@@ -68,6 +68,13 @@ A newly created private, normalized cookie-state file from `auth export-playwrig
 
 The CLI browser-cookie bundle saved to `storage-state.json` for later API access. Its raw expiry convention is not guaranteed to be Playwright-compatible; use the explicit export for browser-context checks. JWT state remains separate.
 
+## Key issuance operation marker
+
+An operator-supplied UUID embedded in a current-user key's name and dedicated
+1Password item to reconcile an ambiguous creation attempt. It is not backend
+idempotency or a uniqueness constraint; never share it concurrently or generate
+a fresh marker to blindly retry an unknown outcome.
+
 ## Ticket lifecycle
 
 The required movement of a ticket through `docs/tickets/todo/`, `docs/tickets/in-progress/`, and `docs/tickets/done/`, with the ticket's `Status:` field kept in sync with its folder.
