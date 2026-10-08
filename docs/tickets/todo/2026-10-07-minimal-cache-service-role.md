@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [backend research](2026-10-07-service-key-provisioning-integration.md), [permission management](2026-10-08-security-role-permission-management.md), [secret output](2026-10-07-secret-safe-key-issuance.md), [acceptance](2026-10-08-service-account-isolated-acceptance.md), [ADR 0024](../../decisions/0024-targeted-cache-controls.md)
+- Related: [backend research](../in-progress/2026-10-07-service-key-provisioning-integration.md), [permission management](../in-progress/2026-10-08-security-role-permission-management.md), [secret output](2026-10-07-secret-safe-key-issuance.md), [acceptance](2026-10-08-service-account-isolated-acceptance.md), [ADR 0024](../../decisions/0024-targeted-cache-controls.md)
 
 ## Context
 

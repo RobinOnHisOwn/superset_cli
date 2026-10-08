@@ -5,7 +5,7 @@
 - Type: research
 - Created by: agent
 - Created at: 2026-10-08
-- Related: [backend integration/fallback](2026-10-07-service-key-provisioning-integration.md), [permission management](2026-10-08-security-role-permission-management.md), [service identity](2026-10-07-minimal-cache-service-role.md), [secret output](2026-10-07-secret-safe-key-issuance.md), [cache acceptance](../in-progress/2026-10-07-targeted-cache-invalidation.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md), [ADR 0024](../../decisions/0024-targeted-cache-controls.md)
+- Related: [backend integration/fallback](../in-progress/2026-10-07-service-key-provisioning-integration.md), [permission management](../in-progress/2026-10-08-security-role-permission-management.md), [service identity](2026-10-07-minimal-cache-service-role.md), [secret output](2026-10-07-secret-safe-key-issuance.md), [cache acceptance](../in-progress/2026-10-07-targeted-cache-invalidation.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md), [ADR 0024](../../decisions/0024-targeted-cache-controls.md)
 
 ## Context
 

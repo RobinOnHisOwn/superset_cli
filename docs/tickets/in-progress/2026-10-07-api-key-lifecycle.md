@@ -7,7 +7,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [backend prerequisite](../todo/2026-10-07-service-key-provisioning-integration.md), [safe issuance](../todo/2026-10-07-secret-safe-key-issuance.md), [ADR 0009](../../decisions/0009-write-command-explicit-opt-in.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md), `src/superset_cli/cli.py`, `src/superset_cli/client.py`
+- Related: [backend prerequisite](2026-10-07-service-key-provisioning-integration.md), [safe issuance](../todo/2026-10-07-secret-safe-key-issuance.md), [ADR 0009](../../decisions/0009-write-command-explicit-opt-in.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md), `src/superset_cli/cli.py`, `src/superset_cli/client.py`
 
 ## Context
 

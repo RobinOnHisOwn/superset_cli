@@ -74,6 +74,12 @@ A unique operator UUID embedded in a current-user key name for reconciliation
 of an ambiguous create. It is correlation, not backend idempotency or a uniqueness
 constraint. Never share it concurrently or generate a fresh one to blindly retry.
 
+## Stored direct role grants
+
+The permission/resource pairs stored on a role and exposed by FAB's role-permissions
+endpoint. Exact direct-grant verification does not prove complete effective user
+permissions from other roles, groups, builtin rules, or synchronization.
+
 ## Secret output
 
 The separate `--secret-output` opt-in for current-user creation. Stdout contains

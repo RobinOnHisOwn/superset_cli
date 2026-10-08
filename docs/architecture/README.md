@@ -401,6 +401,16 @@ use the existing `_run_list`/`_run_get` helpers in `cli.py` and corresponding
 `get_explore_form_data`; the latter unwraps `form_data`, not `result`.
 Tests: `tests/test_security_explore_reads.py`.
 
+`security permissions` uses `list_permission_resources` and existing list controls
+for FAB permission/resource metadata. `security roles permissions` uses
+`get_role_permissions` for validated direct grants. `security roles permissions-set`
+uses `set_role_permissions`: explicit expected role identity/current pairs, complete
+metadata traversal, target POST schema validation, one CSRF-protected replacement,
+and exact identity/ID/name read-back. Ambiguous writes or failed/mismatched read-back
+produce non-success recovery metadata, never automatic retries or rollback. This
+is not effective-user permission verification or service-user provisioning.
+Tests: `tests/test_role_permissions.py`; rationale: [ADR 0026](../decisions/0026-guarded-role-permissions.md).
+
 ### Charts commands
 
 - `charts list <instance>`

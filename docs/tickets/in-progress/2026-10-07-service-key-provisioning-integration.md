@@ -1,11 +1,11 @@
 # Determine supported service-user key administration or document operator fallback
 
-- Status: todo
+- Status: in-progress
 - Priority: high
 - Type: research
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [service role](2026-10-07-minimal-cache-service-role.md), [secret output](2026-10-07-secret-safe-key-issuance.md), [acceptance](2026-10-08-service-account-isolated-acceptance.md), [current-user lifecycle](../in-progress/2026-10-07-api-key-lifecycle.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
+- Related: [service role](../todo/2026-10-07-minimal-cache-service-role.md), [secret output](../todo/2026-10-07-secret-safe-key-issuance.md), [acceptance](../todo/2026-10-08-service-account-isolated-acceptance.md), [current-user lifecycle](../in-progress/2026-10-07-api-key-lifecycle.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
 
 ## Context
 
@@ -25,6 +25,12 @@ Unknown: whether a supported, separately authorized backend integration exists i
 - [ ] Specify non-secret owner/UUID metadata and reconciliation for lost responses. Never automatically retry a sent mutation; uncertain outcomes are non-success with explicit operator guidance.
 - [ ] Prove operator revocation without using the runtime credential or granting it lifecycle permissions; verify stored revocation and, on the authorized isolated instance, credential rejection.
 - [ ] Hand the verified integration or operator fallback to the secret-output and acceptance tickets. Write an implementation plan before code changes and record any durable authorization/recovery decision.
+
+## Source research progress
+
+[Version-pinned operator prerequisite research](../../plans/2026-10-08-service-key-operator-research.md) verifies owner-only REST behavior, service-user-capable application-side manager methods, group/builtin role limitations, and operator fallback safety requirements. Manager revocation sets `revoked_on`, not the active column; use fresh derived inactivity. Runtime key validation switches request user globals and must not replace the independent recovery operator context.
+
+No supported privileged deployment extension or runner contract has been supplied. The operator fallback is a proposed owner-maintained workflow, not an implemented CLI cross-user feature. Deployment authorization/audit, fresh ownership/effective-permission evidence, secure emission/reconciliation and independent live recovery remain blocked; no checklist is marked complete based on upstream source alone.
 
 ## Notes
 

@@ -175,6 +175,27 @@ def _resolve_schema(spec: dict, node: dict, seen: tuple = ()) -> dict:
     return node
 
 
+def _permission_pairs(value: list) -> set[tuple[str, str]]:
+    if (not isinstance(value, list) or any(not isinstance(pair, list) or len(pair) != 2
+            or any(not isinstance(name, str) or not name or not name.isprintable() for name in pair)
+            for pair in value)):
+        raise ValueError("Permissions must be explicit arrays of [permission_name, resource_name] pairs.")
+    pairs = {tuple(pair) for pair in value}
+    if len(pairs) != len(value):
+        raise ValueError("Duplicate permission/resource pairs are not allowed.")
+    return pairs
+
+
+def _permission_rows(rows: list) -> list[dict]:
+    if (not isinstance(rows, list) or any(not isinstance(row, dict) or type(row.get("id")) is not int
+            or row["id"] < 1 for row in rows)):
+        raise ValueError("Missing or malformed permission metadata; unknown is not empty.")
+    _permission_pairs([[row.get("permission_name"), row.get("view_menu_name")] for row in rows])
+    if len({row["id"] for row in rows}) != len(rows):
+        raise ValueError("Duplicate permission IDs are not allowed.")
+    return [{key: row[key] for key in ("id", "permission_name", "view_menu_name")} for row in rows]
+
+
 class Cookie(BaseModel):
     name: str
     value: str
@@ -566,6 +587,85 @@ class SupersetClient:
 
     def get_role(self, pk: str) -> dict:
         return self._get(f"/api/v1/security/roles/{pk}").get("result", {})
+
+    def list_permission_resources(self, **list_options) -> dict:
+        return self._list_resource("/api/v1/security/permissions-resources/", **list_options)
+
+    def get_role_permissions(self, pk: str) -> dict:
+        if not isinstance(pk, str) or not re.fullmatch(r"[1-9][0-9]*", pk):
+            raise ValueError("Role ID must be a positive integer.")
+        payload = self._get(f"/api/v1/security/roles/{pk}/permissions/")
+        return {"result": _permission_rows(payload.get("result") if isinstance(payload, dict) else None)}
+
+    def set_role_permissions(self, pk: str, body: dict) -> dict:
+        if not isinstance(pk, str) or not re.fullmatch(r"[1-9][0-9]*", pk):
+            raise ValueError("Role ID must be a positive integer.")
+        if (not isinstance(body, dict) or set(body) != {"expected_role_name", "expected_permissions", "permissions"}
+                or not isinstance(body["expected_role_name"], str) or not body["expected_role_name"]
+                or not body["expected_role_name"].isprintable()):
+            raise ValueError("Specify expected_role_name, expected_permissions, and permissions explicitly.")
+        expected, wanted = (_permission_pairs(body[key]) for key in ("expected_permissions", "permissions"))
+        spec = self.get_openapi_spec()
+        try:
+            operation = spec["paths"]["/api/v1/security/roles/{role_id}/permissions"]["post"]
+            request = _resolve_schema(spec, operation["requestBody"])
+            schema = _resolve_schema(spec, request["content"]["application/json"]["schema"])
+            ids = _resolve_schema(spec, schema["properties"]["permission_view_menu_ids"])
+            if (schema.get("type") != "object" or schema.get("required") != ["permission_view_menu_ids"]
+                    or ids.get("type") != "array" or _resolve_schema(spec, ids["items"]).get("type") != "integer"):
+                raise ValueError("Invalid permission ID schema")
+        except (KeyError, TypeError, ValueError, RecursionError) as exc:
+            raise ValueError("Unsupported role-permission POST schema; inspect the target OpenAPI contract.") from exc
+        metadata = self.list_permission_resources(all_pages=True)["result"]
+        try:
+            rows = _permission_rows([{"id": row["id"], "permission_name": row["permission"]["name"],
+                                     "view_menu_name": row["view_menu"]["name"]} for row in metadata])
+        except (KeyError, TypeError) as exc:
+            raise ValueError("Missing or malformed permission/resource metadata.") from exc
+        by_pair = {(row["permission_name"], row["view_menu_name"]): row for row in rows}
+        if not (expected | wanted) <= by_pair.keys():
+            raise ValueError("Requested or expected permission/resource pair is missing from target metadata.")
+        requested = sorted((by_pair[pair] for pair in wanted), key=lambda row: row["id"])
+        expected_ids = {by_pair[pair]["id"] for pair in expected}
+
+        def inspect() -> list[dict]:
+            role = self.get_role(pk)
+            if (not isinstance(role, dict) or type(role.get("id")) is not int or role["id"] != int(pk)
+                    or role.get("name") != body["expected_role_name"]):
+                raise ValueError("Role identity differs from expected ID/name; refusing to adopt it.")
+            return self.get_role_permissions(pk)["result"]
+
+        current = inspect()
+        if ({row["id"] for row in current} != expected_ids
+                or {(row["permission_name"], row["view_menu_name"]) for row in current} != expected):
+            raise ValueError("Role permission drift: current grants differ from explicit expected permissions.")
+        result = {"role_id": int(pk), "role_name": body["expected_role_name"], "requested_permissions": requested,
+                  "permissions": current, "write_performed": False, "verified": True,
+                  "matches_requested": True, "warning": None}
+        if expected == wanted:
+            return result
+        # Acquire CSRF before mutation: failure here means no permission POST was sent.
+        headers = self._write_headers()
+        # ponytail: non-atomic expected-state check; use verified server preconditions when available.
+        try:
+            response = self._request_response("POST", f"/api/v1/security/roles/{pk}/permissions",
+                json={"permission_view_menu_ids": [row["id"] for row in requested]}, headers=headers)
+            self._handle_response(response, path=f"/api/v1/security/roles/{pk}/permissions")
+        except (AuthExpiredError, NotFoundError, httpx.HTTPError, ValueError):
+            result.update(permissions=None, write_performed=None, verified=False, matches_requested=None,
+                warning="Permission write outcome is unknown. Inspect role grants before retrying; do not blindly retry.")
+            return result
+        result["write_performed"] = True
+        try:
+            result["permissions"] = inspect()
+        except (AuthExpiredError, NotFoundError, httpx.HTTPError, ValueError):
+            result.update(permissions=None, verified=False, matches_requested=None,
+                warning="Permission POST succeeded, but role/grant read-back failed. Inspect before retrying; do not blindly retry.")
+            return result
+        result["verified"] = result["matches_requested"] = sorted(result["permissions"], key=lambda row: row["id"]) == requested
+        if not result["matches_requested"]:
+            result["warning"] = "Stored direct role permissions differ from the requested exact set. Inspect before retrying."
+        return result
 
     def list_users(self, *, search: str | None = None, **list_options) -> dict:
         return self._list_resource("/api/v1/security/users/", search=search, search_column="username", **list_options)

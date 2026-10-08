@@ -395,6 +395,47 @@ Security reads obey server permissions; user endpoints may require server-side
 may contain personal metadata. Explore commands inspect saved state only, without
 executing a query or creating an exploration.
 
+### Guarded role permissions
+
+```bash
+uv run superset-cli security permissions prod --all --json
+uv run superset-cli security roles permissions prod 7 --json
+uv run superset-cli security roles permissions-set prod 7 --file /tmp/role-permissions.json --allow-write --json
+```
+
+The replacement file explicitly names the expected role, expected current grants,
+and desired grants. For an independently verified new, empty role, for example:
+
+```json
+{
+  "expected_role_name": "CacheWorker",
+  "expected_permissions": [],
+  "permissions": [
+    ["can_invalidate", "CacheRestApi"],
+    ["can_read", "SecurityRestApi"],
+    ["can_read", "CurrentUserRestApi"],
+    ["can_get", "OpenApi"]
+  ]
+}
+```
+
+Use the actual inspected role ID/name and exact current pairs; `[]` is not a
+wildcard. Missing/ambiguous permission metadata, incomplete traversal, incompatible
+OpenAPI, or identity/grant drift blocks replacement. Empty desired `permissions`
+explicitly clears all direct grants. FAB's POST replaces the complete collection,
+not an incremental add. The CLI reads back IDs and names and exits nonzero on
+mismatch or unverifiable/uncertain writes, without retrying or reverting them.
+No-op replacements still require `--allow-write`.
+
+JSON reports `role_id`, `role_name`, `requested_permissions`, `permissions`,
+`write_performed`, `verified`, `matches_requested`, and `warning`.
+`write_performed: null` means an uncertain mutation outcome; unavailable read-back
+is not an empty grant set. Verification covers stored **direct role grants only**.
+It does not prove effective user/group/builtin/synchronized permissions, provision
+a service identity, or enable cross-user key administration. Inspect before
+retrying. Expected-state comparison is non-atomic and cannot prevent concurrent
+edits. Endpoints require compatible FAB security APIs and server permissions.
+
 ### Chart data output
 
 `charts data` exits 1 when every query fails or no successful query returns rows.

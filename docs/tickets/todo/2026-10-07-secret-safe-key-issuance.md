@@ -5,7 +5,7 @@
 - Type: code
 - Created by: agent
 - Created at: 2026-10-07
-- Related: [backend prerequisite](2026-10-07-service-key-provisioning-integration.md), [service identity](2026-10-07-minimal-cache-service-role.md), [acceptance](2026-10-08-service-account-isolated-acceptance.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
+- Related: [backend prerequisite](../in-progress/2026-10-07-service-key-provisioning-integration.md), [service identity](2026-10-07-minimal-cache-service-role.md), [acceptance](2026-10-08-service-account-isolated-acceptance.md), [ADR 0023](../../decisions/0023-environment-bound-api-keys.md)
 
 ## Context
 
