@@ -59,7 +59,7 @@ superset-cli --help
 
 Upgrade with `uv tool upgrade superset-cli`. Python 3.12 or newer is required;
 uv can provision Python when needed. `pipx install superset-cli` is an alternative.
-PyPI `0.1.0` was verified on 2026-10-06: its wheel includes the API command, CSRF handling, validated cookie-import fallback, and `--clear-query-context`, but no `--version` flag. A local installation also labeled `0.1.0` lacked those capabilities; version labels alone are insufficient. PyPI **0.2.0** was rechecked on 2026-10-07 and includes `--version`, owners, CSRF handling, and Playwright export. Release **0.3.0** added the new cache controls. This checkout prepares **0.3.1** with the subsequent merged maintenance changes; version preparation does not imply publication. An isolated upgrade from 0.1.0 through 0.2.0 to the built 0.3.0 wheel preserved synthetic config/auth files; no publication was performed.
+PyPI `0.1.0` was verified on 2026-10-06: its wheel includes the API command, CSRF handling, validated cookie-import fallback, and `--clear-query-context`, but no `--version` flag. A local installation also labeled `0.1.0` lacked those capabilities; version labels alone are insufficient. PyPI **0.2.0** was rechecked on 2026-10-07 and includes `--version`, owners, CSRF handling, and Playwright export. Release **0.3.0** added the new cache controls. This checkout prepares **0.3.2** with subsequent maintenance and guarded direct role-permission management; version preparation does not imply publication. An isolated upgrade from 0.1.0 through 0.2.0 to the built 0.3.0 wheel preserved synthetic config/auth files; no publication was performed.
 
 Check `command -v superset-cli`, then its installation owner (`uv tool list` or `pipx list`). If it is installed but missing from PATH, use `uv tool update-shell` or `pipx ensurepath` rather than installing another copy. Upgrade with the same tool (`uv tool upgrade superset-cli` or `pipx upgrade superset-cli`). Config/auth files remain separate from the package installation. Check `api --help` and `charts update --help` once per session for required capabilities; use `--version` when available. Inside this source checkout, select `uv run superset-cli` explicitly.
 
@@ -394,6 +394,47 @@ Security reads obey server permissions; user endpoints may require server-side
 `FAB_ADD_SECURITY_API`. Human output is limited to ID/name or username; user JSON
 may contain personal metadata. Explore commands inspect saved state only, without
 executing a query or creating an exploration.
+
+### Guarded role permissions
+
+```bash
+uv run superset-cli security permissions prod --all --json
+uv run superset-cli security roles permissions prod 7 --json
+uv run superset-cli security roles permissions-set prod 7 --file /tmp/role-permissions.json --allow-write --json
+```
+
+The replacement file explicitly names the expected role, expected current grants,
+and desired grants. For an independently verified new, empty role, for example:
+
+```json
+{
+  "expected_role_name": "CacheWorker",
+  "expected_permissions": [],
+  "permissions": [
+    ["can_invalidate", "CacheRestApi"],
+    ["can_read", "SecurityRestApi"],
+    ["can_read", "CurrentUserRestApi"],
+    ["can_get", "OpenApi"]
+  ]
+}
+```
+
+Use the actual inspected role ID/name and exact current pairs; `[]` is not a
+wildcard. Missing/ambiguous permission metadata, incomplete traversal, incompatible
+OpenAPI, or identity/grant drift blocks replacement. Empty desired `permissions`
+explicitly clears all direct grants. FAB's POST replaces the complete collection,
+not an incremental add. The CLI reads back IDs and names and exits nonzero on
+mismatch or unverifiable/uncertain writes, without retrying or reverting them.
+No-op replacements still require `--allow-write`.
+
+JSON reports `role_id`, `role_name`, `requested_permissions`, `permissions`,
+`write_performed`, `verified`, `matches_requested`, and `warning`.
+`write_performed: null` means an uncertain mutation outcome; unavailable read-back
+is not an empty grant set. Verification covers stored **direct role grants only**.
+It does not prove effective user/group/builtin/synchronized permissions, provision
+a service identity, or enable cross-user key administration. Inspect before
+retrying. Expected-state comparison is non-atomic and cannot prevent concurrent
+edits. Endpoints require compatible FAB security APIs and server permissions.
 
 ### Chart data output
 

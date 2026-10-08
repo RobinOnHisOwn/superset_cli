@@ -1300,6 +1300,40 @@ def security_roles_get(
              get_call=lambda c: c.get_role(pk), human_lines=lambda x: [f"{x.get('id')}: {x.get('name')}"])
 
 
+@security_app.command("permissions")
+def security_permissions(
+    ctx: typer.Context, instance_name: str,
+    filters: Annotated[list[str] | None, _LIST_FILTER_OPT] = None,
+    columns: Annotated[list[str] | None, _LIST_COLUMNS_OPT] = None,
+    all_pages: Annotated[bool, _LIST_ALL_OPT] = False,
+    page: Annotated[int | None, _PAGE_OPT] = None,
+    page_size: Annotated[int | None, _PAGE_SIZE_OPT] = None,
+    order_column: Annotated[str | None, _ORDER_COL_OPT] = None,
+    order_direction: Annotated[str | None, _ORDER_DIR_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """Discover permission/resource IDs; never infer grants from role names."""
+    _run_list(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+        columns=columns, empty_message="No permission/resource pairs found.",
+        list_call=lambda c: c.list_permission_resources(**_list_options(filters, columns, all_pages,
+            page=page, page_size=page_size, order_column=order_column, order_direction=order_direction)),
+        line_formatter=lambda x: f"{x.get('id')}: {x.get('permission', {}).get('name')} / {x.get('view_menu', {}).get('name')}")
+
+
+@roles_app.command("permissions")
+def security_role_permissions(
+    ctx: typer.Context, instance_name: str, pk: str,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+) -> None:
+    """Inspect stored direct role grants, not complete effective user permissions."""
+    _run_get(ctx=ctx, instance_name=instance_name, state_dir=state_dir, as_json=as_json,
+        get_call=lambda c: c.get_role_permissions(pk),
+        human_lines=lambda x: [f"{r['id']}: {r['permission_name']} / {r['view_menu_name']}" for r in x["result"]]
+            or ["No stored direct role permissions."])
+
+
 @users_app.command("list")
 def security_users_list(
     ctx: typer.Context, instance_name: str,
@@ -2882,6 +2916,34 @@ def themes_delete(
 
 
 # ----- security: roles -----
+
+@roles_app.command("permissions-set")
+def security_role_permissions_set(
+    ctx: typer.Context, instance_name: str, pk: str,
+    body: Annotated[str | None, _BODY_OPT] = None,
+    file: Annotated[Path | None, _FILE_OPT] = None,
+    state_dir: Annotated[Path, _STATE_DIR_OPT] = DEFAULT_STATE_DIR,
+    as_json: Annotated[bool, _JSON_OPT] = False,
+    allow_write: Annotated[bool, _ALLOW_WRITE_OPT] = False,
+) -> None:
+    """Replace all direct grants using explicit expected identity/current pairs and desired pairs."""
+    _require_allow_write(allow_write, action=f"replace all permissions of role {pk}")
+    payload_body = _load_body(body, file)
+    instance = _require_instance(ctx, instance_name)
+    storage = _require_storage_state(instance_name=instance_name, state_dir=state_dir)
+    with _api_errors():
+        with _client(instance=instance, storage_state_path=storage) as client:
+            payload = client.set_role_permissions(pk, payload_body)
+    if as_json:
+        typer.echo(json.dumps(payload, separators=(",", ":")))
+    else:
+        typer.echo("Stored direct grants verified." if payload["matches_requested"] else "Stored direct grants are not verified.")
+        for row in payload["permissions"] or []:
+            typer.echo(f"{row['id']}: {row['permission_name']} / {row['view_menu_name']}")
+    if payload["warning"]:
+        typer.echo(payload["warning"], err=True)
+        raise typer.Exit(code=1)
+
 
 @security_app.command("role-create")
 def security_role_create(
